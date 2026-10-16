@@ -1,0 +1,36 @@
+# Updating the upstream version
+
+Upstream is the prebuilt image `ghcr.io/ovumcy/ovumcy-web`, pinned by release tag. Nothing is built from source and there is no submodule.
+
+## Determining the upstream version
+
+The pin lives in `startos/manifest/index.ts`, as `images.ovumcy.source.dockerTag`.
+
+The latest upstream release:
+
+```bash
+gh release view -R ovumcy/ovumcy-web --json tagName -q .tagName
+```
+
+Confirm that tag actually has a published image for the architectures this package declares before pinning it — a release can exist before its image does:
+
+```bash
+docker manifest inspect ghcr.io/ovumcy/ovumcy-web:<tag> | jq -r '.manifests[].platform.architecture'
+```
+
+**Releases lag the default branch.** Upstream commits heavily between tags, so the newest release can be months behind `main`. Track tags anyway: a tag is a point upstream chose to stand behind, and its migrations and docs match. Do not pin a `sha-<commit>` tag to get ahead of a release.
+
+## Applying the bump
+
+1. Read upstream's `CHANGELOG.md` and the release notes between the pinned tag and the new one. Three things in particular change what this package has to do:
+   - **New or changed environment variables.** Ovumcy has no config file; everything is environment. A new variable this package does not pass is silently left at the application's own default, which may not be the choice this package made. `appEnv` in `startos/utils.ts` is the list to reconcile, and the table in `README.md` § File Models and the `startos_managed_env_vars` block document it.
+   - **Operator CLI changes.** `startos/actions/` drives `users create`, `users list`, `users delete`, `reset-password` and `notify`. A changed flag, prompt order or stdin convention breaks an action quietly — `users create` and `reset-password` in particular read the password as the first line of piped stdin.
+   - **Migrations that refuse to run, or downgrade caveats.** Upstream documents both in `docs/self-hosted.md`.
+2. Update `dockerTag` in `startos/manifest/index.ts`.
+3. Update `version` in `startos/versions/current.ts` to `<upstream version>:0`, and write `releaseNotes` in all five locales. A package-only change keeps the upstream version and raises the revision after the colon instead (`1.9.2:1`).
+4. Add new user-facing strings to `startos/i18n/dictionaries/default.ts` and translate them in `translations.ts` for every locale — `satisfies Record<string, LangDict>` fails the build if a locale is incomplete.
+5. `make x86`, then install on a StartOS box and verify against reality rather than against `tsc`. At minimum: a real sign-in, one account created through `create-account`, and a backup/restore round-trip. The full protocol is `references/verify-on-startos.md` in the `package-service` skill of your packaging workspace.
+
+## Architecture
+
+This package declares `x86_64` only. Upstream publishes `linux/amd64` and `linux/arm64`, so adding `'aarch64'` to `images.ovumcy.arch` and `arm` to `ARCHES` in the `Makefile` is the whole change — but test it on ARM hardware before shipping it, rather than assuming the emulated build is representative.

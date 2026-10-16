@@ -42,7 +42,9 @@ export const setAdminPassword = sdk.Action.withoutInput(
     // which case this is — rather than inferring it from the store — keeps a
     // restored backup, or an account deleted inside the app, from turning into
     // a failed command.
-    if (await accountExists(effects, adminEmail)) {
+    const rotated = await accountExists(effects, adminEmail)
+
+    if (rotated) {
       await runCli(
         effects,
         ['reset-password', adminEmail],
@@ -61,9 +63,18 @@ export const setAdminPassword = sdk.Action.withoutInput(
     return {
       version: '1',
       title: i18n('Admin Credentials'),
-      message: i18n(
-        'Sign in with these at the Web Interface. Nothing is emailed — this server sends no mail — so save the password somewhere you can find it, and save the recovery code the app offers you on first sign-in.',
-      ),
+      // A reset and a first creation land the user somewhere different, so
+      // they are told different things. After a reset Ovumcy requires a new
+      // password at the next sign-in, which makes the one below good for
+      // exactly that sign-in; a newly created account goes to onboarding and
+      // keeps its password.
+      message: rotated
+        ? i18n(
+            'Sign in with this at the Web Interface. Ovumcy will immediately ask you to choose a new password — that is expected after a reset, so this one is good for a single sign-in. Nothing is emailed; this server sends no mail.',
+          )
+        : i18n(
+            'Sign in with these at the Web Interface. Nothing is emailed — this server sends no mail — so save the password somewhere you can find it, and save the recovery code the app offers you on first sign-in.',
+          ),
       result: {
         type: 'group',
         value: [

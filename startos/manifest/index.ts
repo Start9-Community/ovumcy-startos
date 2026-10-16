@@ -25,7 +25,14 @@ export const manifest = setupManifest({
   ],
   images: {
     ovumcy: {
-      source: { dockerTag: 'ghcr.io/ovumcy/ovumcy-web:v1.9.2' },
+      // A main-branch build, pinned by commit, rather than the v1.9.2 release
+      // tag. v1.9.2 predates upstream's non-interactive `reset-password`: it
+      // demands a terminal, and there is no terminal behind a StartOS action,
+      // which leaves the documented account-recovery path unreachable. This
+      // tag is immutable (it names one commit) and is the same digest `latest`
+      // resolved to when it was chosen. UPDATING.md says when to move back to
+      // a release tag.
+      source: { dockerTag: 'ghcr.io/ovumcy/ovumcy-web:sha-8918dac' },
       // Upstream publishes linux/amd64 and linux/arm64. This package ships
       // x86_64 only for now; adding 'aarch64' here is the whole change.
       arch: ['x86_64'],

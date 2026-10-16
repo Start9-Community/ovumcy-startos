@@ -69,7 +69,7 @@ export const resetAccountPassword = sdk.Action.withInput(
       version: '1',
       title: i18n('Password Reset'),
       message: i18n(
-        'Give this to the person it belongs to and have them change it in the app. Their cycle data is untouched.',
+        'Give this to the person it belongs to. Ovumcy will require them to choose a new password as soon as they sign in, so this one is good for a single sign-in. Their cycle data is untouched.',
       ),
       result: {
         type: 'group',

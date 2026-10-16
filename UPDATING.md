@@ -1,6 +1,22 @@
 # Updating the upstream version
 
-Upstream is the prebuilt image `ghcr.io/ovumcy/ovumcy-web`, pinned by release tag. Nothing is built from source and there is no submodule.
+Upstream is the prebuilt image `ghcr.io/ovumcy/ovumcy-web`. Nothing is built from source and there is no submodule.
+
+## The pin is currently a commit, not a release
+
+`v1.9.2` — the newest release when this package was written — cannot reset a password without a controlling terminal, and no StartOS action has one. The pin is therefore `sha-8918dac`, a main-branch build carrying upstream's non-interactive `reset-password`; `sha-` tags name one commit each, so the pin is immutable.
+
+**Move back to a release tag as soon as one contains that change.** The test is behavioral, not a changelog read — run it against the candidate image before repinning:
+
+```bash
+printf 'Throwaway-Pass-1!\n' | docker run --rm -i \
+  -v "$PWD/probe-data:/app/data" -v "$PWD/probe-fence:/app/fence" \
+  -e SECRET_KEY=probe -e DB_DRIVER=sqlite -e DB_PATH=/app/data/ovumcy.db \
+  -e CALENDAR_FEED_FENCE_PATH=/app/fence/calendar-feed.fence \
+  ghcr.io/ovumcy/ovumcy-web:<candidate> /app/ovumcy users create probe@example.com
+```
+
+Then start that image once (so it writes the fence), stop it, and run `reset-password probe@example.com` the same way. If it answers `secure password prompt requires an interactive terminal`, that release still predates the fix — stay on the commit pin. Throw the probe directories away afterwards.
 
 ## Determining the upstream version
 
@@ -27,8 +43,8 @@ docker manifest inspect ghcr.io/ovumcy/ovumcy-web:<tag> | jq -r '.manifests[].pl
    - **Operator CLI changes.** `startos/actions/` drives `users create`, `users list`, `users delete`, `reset-password` and `notify`. A changed flag, prompt order or stdin convention breaks an action quietly — `users create` and `reset-password` in particular read the password as the first line of piped stdin.
    - **Migrations that refuse to run, or downgrade caveats.** Upstream documents both in `docs/self-hosted.md`.
 2. Update `dockerTag` in `startos/manifest/index.ts`.
-3. Update `version` in `startos/versions/current.ts` to `<upstream version>:0`, and write `releaseNotes` in all five locales. A package-only change keeps the upstream version and raises the revision after the colon instead (`1.9.2:1`).
-4. Add new user-facing strings to `startos/i18n/dictionaries/default.ts` and translate them in `translations.ts` for every locale — `satisfies Record<string, LangDict>` fails the build if a locale is incomplete.
+3. Update `version` in `startos/versions/current.ts` to `<upstream version>:0`, and write `releaseNotes` in all five locales. A package-only change keeps the upstream version and raises the revision after the colon instead (`1.9.2:1`). While the pin is a commit build, the version's base stays at the release it descends from.
+4. Add new user-facing strings to `startos/i18n/dictionaries/default.ts` and translate them in `translations.ts` for every locale — `satisfies Record<string, LangDict>` fails the build if a locale is incomplete. Note that the dictionary is keyed by index and the indices shift whenever a string is inserted, so adding one by hand means renumbering every locale below it; regenerate both files from the sources instead, carrying translations across by their English text.
 5. `make x86`, then install on a StartOS box and verify against reality rather than against `tsc`. At minimum: a real sign-in, one account created through `create-account`, and a backup/restore round-trip. The full protocol is `references/verify-on-startos.md` in the `package-service` skill of your packaging workspace.
 
 ## Architecture

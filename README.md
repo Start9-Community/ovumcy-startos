@@ -34,19 +34,23 @@
 
 The upstream image is used unmodified, pinned by tag in `startos/manifest/index.ts`. It is built `FROM scratch` around a static Go binary — there is no shell, no package manager and no coreutils inside it, which is worth knowing before writing any oneshot or action that assumes one. It carries `/etc/passwd` and `/etc/group` (so a named user resolves), CA certificates and zoneinfo, and nothing else.
 
+The pin is a **main-branch commit, not a release tag**. The newest upstream release cannot reset a password without a controlling terminal, and there is no terminal behind a StartOS action, which would leave account recovery — the thing an admin needs when someone is locked out — unreachable. The pinned commit is immutable and carries upstream's non-interactive path. `UPDATING.md` records when to move back to a release tag.
+
 | What             | Detail                                                                        |
 | ---------------- | ----------------------------------------------------------------------------- |
 | Image source     | Upstream, unmodified, from GHCR                                               |
 | Architectures    | x86_64                                                                        |
 | Entrypoint       | The image's `CMD` named explicitly as `/app/ovumcy`; it declares no ENTRYPOINT |
-| Process user     | `ovumcy` (uid/gid 10001), set explicitly on every command                     |
+| Process user     | `root` **inside the subcontainer**, set explicitly on every command            |
+
+Running as root is a deviation from upstream, which ships `USER 10001`, and it is forced. StartOS mounts volumes root-owned on every start, so a uid-10001 process cannot write its own database, and both documented remedies are unavailable: a `chown` oneshot needs a `chown` binary this image does not contain, and an `idmap` on the mount is refused by the host (`open_tree_attr IDMAP: Operation not permitted`). The remaining options were namespaced root in a single-service container whose only writable mounts are this service's own volumes, or rebuilding the upstream binary into an image carrying busybox — which would discard the Cosign signature and SLSA provenance attached to the upstream image. For a health-data service the signed image mattered more.
 
 Two subcontainers:
 
 - **`ovumcy-sub`** — the long-running daemon. Attach to it to watch the server: `start-cli package attach ovumcy -n ovumcy-sub`.
 - **`ovumcy-cli`** — created and torn down by each account-management action, which runs the upstream operator CLI (`/app/ovumcy users …`, `reset-password`, `notify`) against the same data volume. It is not running between actions.
 
-Volume mounts are id-remapped (`idmap`, filesystem uid 0 → container uid 10001) so the non-root process owns its own data. The scratch image has no `chown` to do this with, and the remap means none is needed.
+Volume mounts carry no `idmap`; the daemon and every command run as root in the container instead, for the reason above.
 
 ## Volume and Data Layout
 
@@ -106,7 +110,7 @@ Ten actions, in three groups: the package's own credential, account management f
 
 | Action                   | When to run it                                                                    | What it changes                                              | Cost / repeat safety                                                                      |
 | ------------------------ | --------------------------------------------------------------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
-| `set-admin-password`     | First install, or to rotate the admin credential                                  | The admin row in the database, and `adminPassword` in the store | Seconds. Safe to repeat — each run replaces the password and signs that account out        |
+| `set-admin-password`     | First install, or to rotate the admin credential                                  | The admin row in the database, and `adminPassword` in the store | Seconds. Safe to repeat — each run replaces the password and signs that account out. On a rotation the returned password is good for **one** sign-in: upstream then requires a new one (see below) |
 | `create-account`         | Adding another person to the server                                               | Inserts an account in the database                           | Seconds. **Not** idempotent: a second run for the same address fails, by upstream design   |
 | `list-accounts`          | Before any action that needs an address or id; auditing who exists                | Nothing                                                      | Seconds, read-only, repeatable                                                             |
 | `reset-account-password` | Someone has lost both their password and their recovery code                      | That account's password hash and session version; the store too if the address is the admin's | Seconds. Safe to repeat. Signs that account out everywhere                                  |
@@ -118,6 +122,10 @@ Ten actions, in three groups: the package's own credential, account management f
 | `rotate-app-secret`      | The application secret is believed to have leaked                                 | `secretKey` in the store                                      | Seconds, restarts the daemon. Safe to repeat and **costly**: every session, TOTP enrolment, stored webhook URL and feed URL is invalidated |
 
 No action is hidden; all ten are user-facing.
+
+**A CLI-set password is single-use; a CLI-created account's is not.** Upstream distinguishes the two, and so do the actions' result messages. After `reset-password` — which is what `set-admin-password` runs once the admin account exists, and all of `reset-account-password` — the next sign-in is redirected straight to a forced password change, so the value the action returned stops working after it. After `users create` the account signs in and goes to onboarding with the password it was given. The practical consequence: the store's `adminPassword` goes stale the moment a rotated admin signs in and chooses their own, and that is upstream behavior, not drift.
+
+**`reset-password` needs the fence marker, which only a started server writes.** On a never-started install the command refuses, naming the fence. This never bites in practice, because the only path that runs before the first start is the `users create` branch of `set-admin-password` — but it is why that action asks Ovumcy which branch it is on rather than assuming.
 
 Three upstream CLI capabilities are deliberately not exposed as actions: `users set-email` (repair for a legacy-format address), `repair symptom-names` (a break-glass data repair for a migration that refuses to run), and `webhook set` (each person sets their own webhook inside the app). Each is a one-file addition if a real need appears.
 
@@ -144,15 +152,17 @@ The strategy is whole-volume snapshots of `main` and `startos`, taken with the s
 ## Limitations and Differences
 
 1. **x86_64 only.** Upstream publishes an arm64 image too; this package does not yet declare that architecture, so on ARM hardware it would fall to emulation.
-2. **No email, so no self-service password reset.** The package configures no SMTP. Account recovery is the recovery code Ovumcy issues at account creation, or the `reset-account-password` action.
-3. **OIDC / SSO is disabled** (`OIDC_ENABLED=false`) and not exposed. It would need HTTPS to the container plus a redirect URL, and auto-provisioning would add a second route to account creation beside this package's actions.
-4. **Postgres is not supported.** SQLite only, which is upstream's own recommended baseline for a single private deployment.
-5. **The per-IP login budget is widened** from upstream's 8 attempts per 15 minutes to 40. Client IPs cannot be distinguished behind the OS proxy, and over Tor they genuinely are one address, so the stock budget is shared by the whole household and would lock everyone out together. Nothing else is relaxed — the per-account logout budget and the deliberately tight calendar-feed budget keep upstream's defaults.
-6. **HSTS is off** (`HSTS_ENABLED=false`), where upstream defaults it to whatever `COOKIE_SECURE` is. StartOS owns the edge, and pinning a `.local` or `.onion` host to HTTPS in visitors' browsers for a year is not this package's call.
-7. **Sign-in over plain HTTP fails until an action is run.** `COOKIE_SECURE` is on by default; `allow-insecure-cookies` is the documented escape hatch.
-8. **Registration is closed by default**, where upstream's default is open. `toggle-registration` reverses it.
-9. **The daily reminder pass is on by default**, where upstream ships it off. StartOS gives a user no cron, so leaving it off would make webhook reminders unreachable. It stays inert until someone configures a webhook URL in the app.
-10. **Three upstream CLI commands are not exposed** — `users set-email`, `repair symptom-names`, `webhook set` (see [Actions](#actions)).
+2. **The service runs as root inside its container**, where upstream runs as uid 10001 — see [Image and Container Runtime](#image-and-container-runtime) for why, and what the alternative would have cost.
+3. **The image is pinned to a main-branch commit rather than a release**, so this package is ahead of upstream's newest tag. Without it, account recovery does not work at all on StartOS.
+4. **No email, so no self-service password reset.** The package configures no SMTP. Account recovery is the recovery code Ovumcy issues at account creation, or the `reset-account-password` action.
+5. **OIDC / SSO is disabled** (`OIDC_ENABLED=false`) and not exposed. It would need HTTPS to the container plus a redirect URL, and auto-provisioning would add a second route to account creation beside this package's actions.
+6. **Postgres is not supported.** SQLite only, which is upstream's own recommended baseline for a single private deployment.
+7. **The per-IP login budget is widened** from upstream's 8 attempts per 15 minutes to 40. Client IPs cannot be distinguished behind the OS proxy, and over Tor they genuinely are one address, so the stock budget is shared by the whole household and would lock everyone out together. Nothing else is relaxed — the per-account logout budget and the deliberately tight calendar-feed budget keep upstream's defaults.
+8. **HSTS is off** (`HSTS_ENABLED=false`), where upstream defaults it to whatever `COOKIE_SECURE` is. StartOS owns the edge, and pinning a `.local` or `.onion` host to HTTPS in visitors' browsers for a year is not this package's call.
+9. **Sign-in over plain HTTP fails until an action is run.** `COOKIE_SECURE` is on by default; `allow-insecure-cookies` is the documented escape hatch.
+10. **Registration is closed by default**, where upstream's default is open. `toggle-registration` reverses it.
+11. **The daily reminder pass is on by default**, where upstream ships it off. StartOS gives a user no cron, so leaving it off would make webhook reminders unreachable. It stays inert until someone configures a webhook URL in the app.
+12. **Three upstream CLI commands are not exposed** — `users set-email`, `repair symptom-names`, `webhook set` (see [Actions](#actions)).
 
 ---
 

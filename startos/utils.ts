@@ -9,15 +9,25 @@ export const uiPort = 8080
 /** The upstream binary, and the image's own CMD. */
 export const binary = '/app/ovumcy'
 
-/** The image creates this user (uid/gid 10001) and runs as it. Commands run as
- * the same user so that everything on the data volume has one owner. */
-export const appUser = 'ovumcy'
-
-/** Ownership remap for the volume mounts. Volume data is owned by uid 0 on the
- * filesystem; the app runs as uid 10001 inside the container, so without this
- * it cannot write its own database. `fromId` is the id on the filesystem,
- * `toId` the id processes in the container see. */
-const idmap = [{ fromId: 0, toId: 10001 }]
+/**
+ * The user the daemon and every CLI command run as, inside the container.
+ *
+ * The image declares `USER 10001` and upstream runs unprivileged, which is the
+ * better posture and not available here. StartOS mounts volumes root-owned on
+ * every start, so a uid-10001 process cannot write its own database, and the
+ * two documented ways out are both closed: a `chown` oneshot needs a `chown`
+ * binary, which an image built `FROM scratch` does not have, and an `idmap` on
+ * the mount is refused by the host — `open_tree_attr IDMAP: Operation not
+ * permitted`.
+ *
+ * So the process runs as root *within its own subcontainer*: a namespaced root
+ * in a container whose only writable mounts are this service's two data
+ * volumes. The alternative was to rebuild the binary into an image carrying
+ * busybox, which would have discarded the Cosign signature and SLSA provenance
+ * on the upstream image — a worse trade for a health-data service than
+ * namespaced root.
+ */
+export const appUser = 'root'
 
 export const dbPath = '/app/data/ovumcy.db'
 export const fencePath = '/app/fence/calendar-feed.fence'
@@ -36,14 +46,12 @@ export const mounts = () =>
       subpath: null,
       mountpoint: '/app/data',
       readonly: false,
-      idmap,
     })
     .mountVolume({
       volumeId: 'fence',
       subpath: null,
       mountpoint: '/app/fence',
       readonly: false,
-      idmap,
     })
 
 /**

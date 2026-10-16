@@ -52,6 +52,8 @@ export const main = sdk.setupMain(async ({ effects }) => {
       // binary is a static Go program with no init system to keep as PID 1.
       command: [binary],
       env: appEnv(config),
+      // Root inside this subcontainer — see appUser for why the image's own
+      // uid 10001 is not usable here.
       user: appUser,
     },
     ready: {

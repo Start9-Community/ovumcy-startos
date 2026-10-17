@@ -39,7 +39,7 @@ The upstream build it copies from is a **main-branch commit, not a release tag**
 | What             | Detail                                                                        |
 | ---------------- | ----------------------------------------------------------------------------- |
 | Image source     | Built from `./Dockerfile`: upstream's binary, pinned by digest, on `alpine:3.22` |
-| Architectures    | x86_64                                                                        |
+| Architectures    | x86_64, aarch64 (see [Limitations](#limitations-and-differences) on ARM testing) |
 | Entrypoint       | `/app/ovumcy` named explicitly; the image declares no ENTRYPOINT              |
 | Process user     | `ovumcy` (uid 10001), as upstream ships                                       |
 
@@ -155,7 +155,7 @@ The strategy is whole-volume snapshots of `main` and `startos`, taken with the s
 
 ## Limitations and Differences
 
-1. **x86_64 only.** Upstream publishes an arm64 image too; this package does not yet declare that architecture, so on ARM hardware it would fall to emulation.
+1. **aarch64 is built but has not been run on ARM hardware.** Both halves of the image are genuinely multi-arch — the pinned upstream digest is an index carrying `linux/amd64` and `linux/arm64`, and so is the alpine base — so the ARM `.s9pk` contains upstream's own arm64 binary rather than an emulated x86 one. What is unverified is the running service: every on-box check recorded in `AGENTS.md` was done on x86_64.
 2. **The image is rebuilt here rather than used as published.** Upstream's `FROM scratch` image cannot start as a StartOS subcontainer at all, so this package copies the upstream binary — by digest, unmodified — onto an alpine base. The Cosign signature and SLSA provenance apply to the image the binary came from, not to the image this package ships; `UPDATING.md` keeps the digest check in the bump procedure. See [Image and Container Runtime](#image-and-container-runtime).
 3. **The upstream binary comes from a main-branch commit rather than a release**, so this package is ahead of upstream's newest tag. Without it, account recovery does not work at all on StartOS.
 4. **No email, so no self-service password reset.** The package configures no SMTP. Account recovery is the recovery code Ovumcy issues at account creation, or the `reset-account-password` action.
@@ -176,7 +176,7 @@ The strategy is whole-volume snapshots of `main` and `startos`, taken with the s
 package_id: ovumcy
 image: built from ./Dockerfile (upstream ghcr.io/ovumcy/ovumcy-web binary on alpine:3.22)
 process_user: ovumcy (uid 10001)
-architectures: [x86_64]
+architectures: [x86_64, aarch64]
 subcontainers: [ovumcy-sub, ovumcy-cli]
 volumes:
   main: /app/data

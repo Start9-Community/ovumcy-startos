@@ -53,4 +53,6 @@ docker manifest inspect ghcr.io/ovumcy/ovumcy-web:<tag> | jq -r '.manifests[].pl
 
 ## Architecture
 
-This package declares `x86_64` only. Upstream publishes `linux/amd64` and `linux/arm64`, so adding `'aarch64'` to `images.ovumcy.arch` and `arm` to `ARCHES` in the `Makefile` is the whole change — but test it on ARM hardware before shipping it, rather than assuming the emulated build is representative.
+This package declares `x86_64` and `aarch64`, and the `Makefile` builds both (`ARCHES := x86 arm`). Nothing extra is needed to keep that true across a bump: the upstream pin in the `Dockerfile` is a digest for an image **index**, not for one platform's manifest, so each arch builds against upstream's own binary for that arch. If you ever repin to a single-platform digest, the ARM build breaks — `docker buildx imagetools inspect <ref>` shows which kind you have.
+
+The ARM `.s9pk` has not been run on ARM hardware. Every on-box check recorded in `AGENTS.md` was done on x86_64; verify on real ARM hardware before relying on it there.

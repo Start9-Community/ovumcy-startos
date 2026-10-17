@@ -31,9 +31,10 @@ export const manifest = setupManifest({
       // from it at all. The Dockerfile explains the rest, including why the
       // upstream build it copies from is a commit rather than a release tag.
       source: { dockerBuild: {} },
-      // Upstream publishes linux/amd64 and linux/arm64. This package ships
-      // x86_64 only for now; adding 'aarch64' here is the whole change.
-      arch: ['x86_64'],
+      // Both halves of the Dockerfile are multi-arch: the pinned upstream
+      // digest is an image index carrying linux/amd64 and linux/arm64, and so
+      // is the alpine base, so each arch builds against its own binary.
+      arch: ['x86_64', 'aarch64'],
     },
   },
 })

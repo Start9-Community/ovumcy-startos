@@ -10,24 +10,29 @@ export const uiPort = 8080
 export const binary = '/app/ovumcy'
 
 /**
- * The user the daemon and every CLI command run as, inside the container.
- *
- * The image declares `USER 10001` and upstream runs unprivileged, which is the
- * better posture and not available here. StartOS mounts volumes root-owned on
- * every start, so a uid-10001 process cannot write its own database, and the
- * two documented ways out are both closed: a `chown` oneshot needs a `chown`
- * binary, which an image built `FROM scratch` does not have, and an `idmap` on
- * the mount is refused by the host — `open_tree_attr IDMAP: Operation not
- * permitted`.
- *
- * So the process runs as root *within its own subcontainer*: a namespaced root
- * in a container whose only writable mounts are this service's two data
- * volumes. The alternative was to rebuild the binary into an image carrying
- * busybox, which would have discarded the Cosign signature and SLSA provenance
- * on the upstream image — a worse trade for a health-data service than
- * namespaced root.
+ * The user the daemon and every CLI command run as, matching upstream's own
+ * `USER 10001`. StartOS mounts volumes root-owned on every start, so the two
+ * data paths are chowned to this user first — by a oneshot ahead of the daemon
+ * (startos/main.ts) and by `runCli` before each command. An `idmap` on the
+ * mount would avoid the chown, but the host refuses it: `open_tree_attr
+ * IDMAP: Operation not permitted`.
  */
-export const appUser = 'root'
+export const appUser = 'ovumcy'
+
+/** The data paths that must belong to `appUser` before anything writes them. */
+const ownedPaths = ['/app/data', '/app/fence']
+
+/**
+ * Give the volumes to the app's user. Runs as root, is idempotent, and is
+ * cheap — these directories hold one SQLite database and one small file.
+ * Needed on every start because StartOS re-mounts the volumes root-owned.
+ */
+export const chownCommand: [string, ...string[]] = [
+  'chown',
+  '-R',
+  '10001:10001',
+  ...ownedPaths,
+]
 
 export const dbPath = '/app/data/ovumcy.db'
 export const fencePath = '/app/fence/calendar-feed.fence'
@@ -80,19 +85,43 @@ export const appEnv = (store: AppConfig | null) => ({
   // visitor's browser for a year is not ours to do.
   HSTS_ENABLED: 'false',
 
-  // Not behind a proxy we can prove anything about: this package binds plain
-  // HTTP, so no X-Forwarded-* header is added, and trusting one that may be
-  // appended rather than overwritten would make every per-IP limit spoofable.
-  // Client IPs are therefore not recoverable — see the login budget below.
-  TRUST_PROXY_ENABLED: 'false',
+  // The OS reverse proxy must be trusted, or no browser can sign in.
+  //
+  // StartOS terminates TLS and forwards plain HTTP, so fiber's c.Scheme()
+  // reports `http` while the browser's Origin header says `https`. Fiber's
+  // CSRF middleware compares the two and refuses every unsafe request with
+  // `reason="invalid referer"` — a 403 on sign-in that reads as a rejected
+  // password. Trusting the proxy lets c.Scheme() read X-Forwarded-Proto, the
+  // origins match, and the refusal goes away.
+  //
+  // Trusting these headers is safe here, which is the part worth checking
+  // before copying this anywhere: the OS proxy *strips* any client-supplied
+  // X-Forwarded-* and then inserts its own (start-core/src/net/http.rs,
+  // apply_request_policy), so exactly one hop is ever present and it is the
+  // OS's. X-Forwarded-For therefore carries the real client address, and the
+  // per-IP limiters below key on something real rather than on one shared
+  // bucket.
+  TRUST_PROXY_ENABLED: 'true',
+  PROXY_HEADER: 'X-Forwarded-For',
+  // The host's fixed address on the LXC bridge (`lxcbr0`), which is the source
+  // address of every proxied request: the terminating path connects to the
+  // container with no source binding, so the route out of 10.0.3.0/24 selects
+  // the bridge's own IP. Named exactly rather than as the /24, which would
+  // also trust every sibling service on the box. The v6 address is the same
+  // host, kept for the day that leg is used — today the terminating path is
+  // IPv4 only. If a StartOS release ever moves this, sign-in fails exactly as
+  // described above, and this is the line to widen.
+  TRUSTED_PROXIES: '10.0.3.1,fd00:3::1',
 
-  // Every client reaches the app from the OS reverse proxy, and over Tor they
-  // all arrive via the local Tor daemon, so upstream's per-IP login budget of
-  // 8 per 15 minutes is shared by the whole household. Widened to 40, which is
-  // 2.7/min — inside upstream's 30-per-minute ceiling for this pair and well
-  // under its maximum of 100. Nothing else is relaxed: the per-account logout
-  // budget and the deliberately tight calendar-feed budget keep their
-  // defaults, and the feed is the only endpoint reachable with no credential.
+  // On the LAN path X-Forwarded-For now carries each client's own address, so
+  // the per-IP budget separates them. Over Tor it cannot: every client arrives
+  // through the box's own Tor daemon and genuinely shares one source address,
+  // so upstream's budget of 8 per 15 minutes is spent by the household
+  // together. Widened to 40, which is 2.7/min — inside upstream's
+  // 30-per-minute ceiling for this pair and well under its maximum of 100.
+  // Nothing else is relaxed: the per-account logout budget and the
+  // deliberately tight calendar-feed budget keep their defaults, and the feed
+  // is the only endpoint reachable with no credential.
   RATE_LIMIT_LOGIN_MAX: '40',
   RATE_LIMIT_LOGIN_WINDOW: '15m',
 
@@ -129,6 +158,10 @@ export async function runCli(
     mounts(),
     'ovumcy-cli',
     async (sub) => {
+      // The service may never have started — the admin-credential action runs
+      // before the first start — so the volumes can still be root-owned here.
+      await sub.execFail(chownCommand, { user: 'root' })
+
       const { stdout } = await sub.execFail([binary, ...args], {
         env: appEnv(store),
         user: appUser,

@@ -1,6 +1,6 @@
 # Updating the upstream version
 
-Upstream is the prebuilt image `ghcr.io/ovumcy/ovumcy-web`. Nothing is built from source and there is no submodule.
+Upstream is the prebuilt image `ghcr.io/ovumcy/ovumcy-web`. Nothing is built from source and there is no submodule — but the image this package ships is built from the root `Dockerfile`, which copies upstream's `/app/ovumcy` binary, unmodified and pinned by digest, onto an alpine base. Upstream's own image is `FROM scratch` and cannot start as a StartOS subcontainer (no `/proc` in its rootfs), which is why the copy exists; `README.md` § Image and Container Runtime has the detail.
 
 ## The pin is currently a commit, not a release
 
@@ -20,7 +20,7 @@ Then start that image once (so it writes the fence), stop it, and run `reset-pas
 
 ## Determining the upstream version
 
-The pin lives in `startos/manifest/index.ts`, as `images.ovumcy.source.dockerTag`.
+The pin lives in the root `Dockerfile`, as the `FROM … AS upstream` line — a `sha-`/release tag **and** the digest it resolved to. Both move together; `startos/manifest/index.ts` just says `dockerBuild: {}`.
 
 The latest upstream release:
 
@@ -42,10 +42,14 @@ docker manifest inspect ghcr.io/ovumcy/ovumcy-web:<tag> | jq -r '.manifests[].pl
    - **New or changed environment variables.** Ovumcy has no config file; everything is environment. A new variable this package does not pass is silently left at the application's own default, which may not be the choice this package made. `appEnv` in `startos/utils.ts` is the list to reconcile, and the table in `README.md` § File Models and the `startos_managed_env_vars` block document it.
    - **Operator CLI changes.** `startos/actions/` drives `users create`, `users list`, `users delete`, `reset-password` and `notify`. A changed flag, prompt order or stdin convention breaks an action quietly — `users create` and `reset-password` in particular read the password as the first line of piped stdin.
    - **Migrations that refuse to run, or downgrade caveats.** Upstream documents both in `docs/self-hosted.md`.
-2. Update `dockerTag` in `startos/manifest/index.ts`.
+2. Update the `FROM … AS upstream` line in the root `Dockerfile` — tag and digest together. Read the digest off the registry rather than trusting the tag:
+
+   ```bash
+   docker buildx imagetools inspect ghcr.io/ovumcy/ovumcy-web:<tag> --format '{{.Manifest.Digest}}'
+   ```
 3. Update `version` in `startos/versions/current.ts` to `<upstream version>:0`, and write `releaseNotes` in all five locales. A package-only change keeps the upstream version and raises the revision after the colon instead (`1.9.2:1`). While the pin is a commit build, the version's base stays at the release it descends from.
 4. Add new user-facing strings to `startos/i18n/dictionaries/default.ts` and translate them in `translations.ts` for every locale — `satisfies Record<string, LangDict>` fails the build if a locale is incomplete. Note that the dictionary is keyed by index and the indices shift whenever a string is inserted, so adding one by hand means renumbering every locale below it; regenerate both files from the sources instead, carrying translations across by their English text.
-5. `make x86`, then install on a StartOS box and verify against reality rather than against `tsc`. At minimum: a real sign-in, one account created through `create-account`, and a backup/restore round-trip. The full protocol is `references/verify-on-startos.md` in the `package-service` skill of your packaging workspace.
+5. `BUILDX_BUILDER=<an OCI-capable builder> make x86` (the default Docker driver cannot export OCI — see `AGENTS.md`), then install on a StartOS box and verify against reality rather than against `tsc`. At minimum: a real sign-in, one account created through `create-account`, and a backup/restore round-trip. The full protocol is `references/verify-on-startos.md` in the `package-service` skill of your packaging workspace.
 
 ## Architecture
 

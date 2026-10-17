@@ -1,7 +1,7 @@
 import { i18n } from './i18n'
 import { sdk } from './sdk'
 import { AppConfig, storeJson } from './fileModels/store.json'
-import { appEnv, appUser, binary, mounts, uiPort } from './utils'
+import { appEnv, appUser, binary, chownCommand, mounts, uiPort } from './utils'
 
 export const main = sdk.setupMain(async ({ effects }) => {
   /**
@@ -40,33 +40,43 @@ export const main = sdk.setupMain(async ({ effects }) => {
     )
   }
 
-  return sdk.Daemons.of(effects).addDaemon('ovumcy', {
-    subcontainer: sdk.SubContainer.of(
-      effects,
-      { imageId: 'ovumcy' },
-      mounts(),
-      'ovumcy-sub',
-    ),
-    exec: {
-      // The image's CMD, named explicitly. It declares no ENTRYPOINT, and the
-      // binary is a static Go program with no init system to keep as PID 1.
-      command: [binary],
-      env: appEnv(config),
-      // Root inside this subcontainer — see appUser for why the image's own
-      // uid 10001 is not usable here.
-      user: appUser,
-    },
-    ready: {
-      display: i18n('Web Interface'),
-      fn: () =>
-        sdk.healthCheck.checkPortListening(effects, uiPort, {
-          successMessage: i18n('The web interface is ready'),
-          errorMessage: i18n('The web interface is not ready'),
-        }),
-      // Migrations run on start, and the first start of a fresh install
-      // creates the database.
-      gracePeriod: 30_000,
-    },
-    requires: [],
-  })
+  // One subcontainer shared by the chown oneshot and the daemon, so that the
+  // ownership the oneshot sets is the ownership the daemon sees.
+  const subcontainer = sdk.SubContainer.of(
+    effects,
+    { imageId: 'ovumcy' },
+    mounts(),
+    'ovumcy-sub',
+  )
+
+  return sdk.Daemons.of(effects)
+    .addOneshot('chown', {
+      subcontainer,
+      // Re-asked on every start, not install-time setup: StartOS re-mounts
+      // the volumes root-owned each time, and the app runs as uid 10001.
+      exec: { command: chownCommand, user: 'root' },
+      requires: [],
+    })
+    .addDaemon('ovumcy', {
+      subcontainer,
+      exec: {
+        // The image's CMD, named explicitly. The binary is a static Go
+        // program with no init system to keep as PID 1.
+        command: [binary],
+        env: appEnv(config),
+        user: appUser,
+      },
+      ready: {
+        display: i18n('Web Interface'),
+        fn: () =>
+          sdk.healthCheck.checkPortListening(effects, uiPort, {
+            successMessage: i18n('The web interface is ready'),
+            errorMessage: i18n('The web interface is not ready'),
+          }),
+        // Migrations run on start, and the first start of a fresh install
+        // creates the database.
+        gracePeriod: 30_000,
+      },
+      requires: ['chown'],
+    })
 })

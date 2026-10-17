@@ -32,25 +32,25 @@
 
 ## Image and Container Runtime
 
-The upstream image is used unmodified, pinned by tag in `startos/manifest/index.ts`. It is built `FROM scratch` around a static Go binary — there is no shell, no package manager and no coreutils inside it, which is worth knowing before writing any oneshot or action that assumes one. It carries `/etc/passwd` and `/etc/group` (so a named user resolves), CA certificates and zoneinfo, and nothing else.
+The image is built here, from the `Dockerfile` at the repo root: upstream's `/app/ovumcy` binary, copied byte for byte out of upstream's published image, onto an `alpine:3.22` base. The upstream image cannot be used directly — it is built `FROM scratch`, and its layers contain `app/`, `etc/` and `usr/` and nothing else. StartOS launches a subcontainer and waits for `<rootfs>/proc/1` to appear, which a rootfs with no `/proc` can never produce, so that image fails every start with `Failed to start subcontainer ovumcy`. The alpine base supplies the directories a container runtime expects, and with them a shell and coreutils — which is also what makes the `chown` below possible.
 
-The pin is a **main-branch commit, not a release tag**. The newest upstream release cannot reset a password without a controlling terminal, and there is no terminal behind a StartOS action, which would leave account recovery — the thing an admin needs when someone is locked out — unreachable. The pinned commit is immutable and carries upstream's non-interactive path. `UPDATING.md` records when to move back to a release tag.
+The upstream build it copies from is a **main-branch commit, not a release tag**. The newest upstream release cannot reset a password without a controlling terminal, and there is no terminal behind a StartOS action, which would leave account recovery — the thing an admin needs when someone is locked out — unreachable. It is pinned by digest, so the bytes are exactly the ones that were tested. `UPDATING.md` records when to move back to a release tag.
 
 | What             | Detail                                                                        |
 | ---------------- | ----------------------------------------------------------------------------- |
-| Image source     | Upstream, unmodified, from GHCR                                               |
+| Image source     | Built from `./Dockerfile`: upstream's binary, pinned by digest, on `alpine:3.22` |
 | Architectures    | x86_64                                                                        |
-| Entrypoint       | The image's `CMD` named explicitly as `/app/ovumcy`; it declares no ENTRYPOINT |
-| Process user     | `root` **inside the subcontainer**, set explicitly on every command            |
+| Entrypoint       | `/app/ovumcy` named explicitly; the image declares no ENTRYPOINT              |
+| Process user     | `ovumcy` (uid 10001), as upstream ships                                       |
 
-Running as root is a deviation from upstream, which ships `USER 10001`, and it is forced. StartOS mounts volumes root-owned on every start, so a uid-10001 process cannot write its own database, and both documented remedies are unavailable: a `chown` oneshot needs a `chown` binary this image does not contain, and an `idmap` on the mount is refused by the host (`open_tree_attr IDMAP: Operation not permitted`). The remaining options were namespaced root in a single-service container whose only writable mounts are this service's own volumes, or rebuilding the upstream binary into an image carrying busybox — which would discard the Cosign signature and SLSA provenance attached to the upstream image. For a health-data service the signed image mattered more.
+The service keeps upstream's unprivileged uid. StartOS mounts volumes root-owned on every start, so the two data paths are given to uid 10001 before anything writes them — by a `chown` oneshot ahead of the daemon in `startos/main.ts`, and by `runCli` before each CLI command, since an action can run before the service has ever started. An `idmap` on the mount would avoid the chown, but the host refuses it (`open_tree_attr IDMAP: Operation not permitted`). Both the oneshot and the chown in `runCli` run on every start and every command, because the mount is re-made root-owned each time.
 
 Two subcontainers:
 
 - **`ovumcy-sub`** — the long-running daemon. Attach to it to watch the server: `start-cli package attach ovumcy -n ovumcy-sub`.
 - **`ovumcy-cli`** — created and torn down by each account-management action, which runs the upstream operator CLI (`/app/ovumcy users …`, `reset-password`, `notify`) against the same data volume. It is not running between actions.
 
-Volume mounts carry no `idmap`; the daemon and every command run as root in the container instead, for the reason above.
+Volume mounts carry no `idmap`; the `chown` described above is what makes them writable by uid 10001 instead.
 
 ## Volume and Data Layout
 
@@ -94,7 +94,11 @@ One interface, serving the whole application — calendar, per-account settings,
 
 StartOS terminates TLS and forwards plain HTTP, so the container always sees `http` regardless of how the browser reached it. The session cookie's `Secure` flag is therefore a package setting rather than something derived from the request — see `cookieSecure` in the store and the **Allow Sign-In Over Plain HTTP** action. The practical consequence is that sign-in works from an https LAN address or from Tor Browser over `.onion`, and silently fails from a plain `http://` LAN address until that action is run.
 
-Client IP addresses are not recoverable: the package binds plain HTTP, so no `X-Forwarded-*` header is added, and over Tor every client arrives through the local Tor daemon anyway. `TRUST_PROXY_ENABLED` is therefore off — trusting a header that may be appended rather than overwritten would make every per-IP limit spoofable. Because upstream's per-IP login budget is consequently shared by everyone on the server, the package raises that one budget (see [Limitations and Differences](#limitations-and-differences)).
+The OS reverse proxy is trusted (`TRUST_PROXY_ENABLED=true`, `TRUSTED_PROXIES=10.0.3.1,fd00:3::1`), and it has to be or **no browser can sign in**. StartOS terminates TLS and forwards plain HTTP, so the app sees scheme `http` while the browser's `Origin` header says `https`; Fiber's CSRF middleware compares the two and refuses every unsafe request with `403` and `reason="invalid referer"` — which looks exactly like a rejected password on the sign-in form. Trusting the proxy lets the app read `X-Forwarded-Proto`, the origins match, and sign-in works.
+
+This is safe because the OS proxy **strips** any client-supplied `X-Forwarded-*` header before inserting its own, so exactly one hop is ever present and it is the OS's. `10.0.3.1` is the host's fixed address on the LXC bridge — the source address of every proxied request — named exactly rather than as a `/24`, which would also trust every sibling service on the box.
+
+A consequence worth having: `X-Forwarded-For` now carries each client's real address, so the per-IP limiters distinguish LAN clients instead of pooling them. Over Tor they still genuinely share one address (the box's own Tor daemon), which is why the login budget is still widened (see [Limitations and Differences](#limitations-and-differences)).
 
 ## Installation and First-Run Flow
 
@@ -141,7 +145,7 @@ One check, on the daemon itself.
 
 - **Web Interface** — `checkPortListening` on 8080, with a 30-second grace period. Within the grace window a failure reads as "starting", which covers the first start of a fresh install: the binary applies database migrations before it listens, and on a new install it creates the database first.
 
-A failure after that window means the process is up but not listening, or has exited — the service log is the next place to look. The most likely causes are a `store.json` with no `secretKey` (the daemon refuses to start and says so) and an unwritable `/app/data` (the id-remap on the mount is what normally prevents this).
+A failure after that window means the process is up but not listening, or has exited — the service log is the next place to look. The most likely causes are a `store.json` with no `secretKey` (the daemon refuses to start and says so) and an unwritable `/app/data` (the `chown` oneshot is what normally prevents this — if it failed, the service log says so before the daemon's first line).
 
 ## Backups and Restore
 
@@ -152,12 +156,12 @@ The strategy is whole-volume snapshots of `main` and `startos`, taken with the s
 ## Limitations and Differences
 
 1. **x86_64 only.** Upstream publishes an arm64 image too; this package does not yet declare that architecture, so on ARM hardware it would fall to emulation.
-2. **The service runs as root inside its container**, where upstream runs as uid 10001 — see [Image and Container Runtime](#image-and-container-runtime) for why, and what the alternative would have cost.
-3. **The image is pinned to a main-branch commit rather than a release**, so this package is ahead of upstream's newest tag. Without it, account recovery does not work at all on StartOS.
+2. **The image is rebuilt here rather than used as published.** Upstream's `FROM scratch` image cannot start as a StartOS subcontainer at all, so this package copies the upstream binary — by digest, unmodified — onto an alpine base. The Cosign signature and SLSA provenance apply to the image the binary came from, not to the image this package ships; `UPDATING.md` keeps the digest check in the bump procedure. See [Image and Container Runtime](#image-and-container-runtime).
+3. **The upstream binary comes from a main-branch commit rather than a release**, so this package is ahead of upstream's newest tag. Without it, account recovery does not work at all on StartOS.
 4. **No email, so no self-service password reset.** The package configures no SMTP. Account recovery is the recovery code Ovumcy issues at account creation, or the `reset-account-password` action.
 5. **OIDC / SSO is disabled** (`OIDC_ENABLED=false`) and not exposed. It would need HTTPS to the container plus a redirect URL, and auto-provisioning would add a second route to account creation beside this package's actions.
 6. **Postgres is not supported.** SQLite only, which is upstream's own recommended baseline for a single private deployment.
-7. **The per-IP login budget is widened** from upstream's 8 attempts per 15 minutes to 40. Client IPs cannot be distinguished behind the OS proxy, and over Tor they genuinely are one address, so the stock budget is shared by the whole household and would lock everyone out together. Nothing else is relaxed — the per-account logout budget and the deliberately tight calendar-feed budget keep upstream's defaults.
+7. **The per-IP login budget is widened** from upstream's 8 attempts per 15 minutes to 40. Over Tor every client arrives through the box's own Tor daemon and genuinely shares one address, so the stock budget is spent by the whole household together and would lock everyone out at once. Nothing else is relaxed — the per-account logout budget and the deliberately tight calendar-feed budget keep upstream's defaults.
 8. **HSTS is off** (`HSTS_ENABLED=false`), where upstream defaults it to whatever `COOKIE_SECURE` is. StartOS owns the edge, and pinning a `.local` or `.onion` host to HTTPS in visitors' browsers for a year is not this package's call.
 9. **Sign-in over plain HTTP fails until an action is run.** `COOKIE_SECURE` is on by default; `allow-insecure-cookies` is the documented escape hatch.
 10. **Registration is closed by default**, where upstream's default is open. `toggle-registration` reverses it.
@@ -170,7 +174,8 @@ The strategy is whole-volume snapshots of `main` and `startos`, taken with the s
 
 ```yaml
 package_id: ovumcy
-image: ghcr.io/ovumcy/ovumcy-web
+image: built from ./Dockerfile (upstream ghcr.io/ovumcy/ovumcy-web binary on alpine:3.22)
+process_user: ovumcy (uid 10001)
 architectures: [x86_64]
 subcontainers: [ovumcy-sub, ovumcy-cli]
 volumes:
@@ -191,6 +196,8 @@ startos_managed_env_vars:
   - COOKIE_SECURE
   - HSTS_ENABLED
   - TRUST_PROXY_ENABLED
+  - PROXY_HEADER
+  - TRUSTED_PROXIES
   - RATE_LIMIT_LOGIN_MAX
   - RATE_LIMIT_LOGIN_WINDOW
   - REMINDER_SCHEDULER_ENABLED

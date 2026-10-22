@@ -4,39 +4,26 @@ import { defaultReminderHour, storeJson } from '../fileModels/store.json'
 
 const { InputSpec, Value } = sdk
 
-/**
- * Keys mirror store.json, so the prefill and the write are pass-throughs and
- * a field added to one side without the other is a type error.
- */
 const inputSpec = InputSpec.of({
-  timezone: Value.text({
-    name: i18n('Time Zone'),
+  registrationOpen: Value.toggle({
+    name: i18n('Open Registration'),
     description: i18n(
-      'An IANA time zone such as Europe/London or America/New_York. Cycle entries are dates, so this decides where the server’s day starts.',
+      'Let people create their own account from the sign-in page, instead of you creating each one with Create Account.',
     ),
-    required: true,
-    default: 'UTC',
-    patterns: [
-      {
-        regex: '(UTC|[A-Za-z]+/[A-Za-z_+-]+(/[A-Za-z_+-]+)?)',
-        description: i18n(
-          'Must be UTC or an IANA zone name such as Europe/London',
-        ),
-      },
-    ],
+    warning: i18n(
+      'Anyone who can reach your LAN address or your onion address will be able to create an account on this server.',
+    ),
+    default: false,
   }),
-  language: Value.select({
-    name: i18n('Language'),
-    description: i18n('The language the app is shown in.'),
-    default: 'en',
-    values: {
-      en: 'English',
-      de: 'Deutsch',
-      es: 'Español',
-      fr: 'Français',
-      it: 'Italiano',
-      ru: 'Русский',
-    },
+  cookieSecure: Value.toggle({
+    name: i18n('Require A Secure Connection To Sign In'),
+    description: i18n(
+      'Sign-in works from the https LAN address, or from your onion address in Tor Browser. Turn this off only if you need to sign in over a plain http:// address.',
+    ),
+    warning: i18n(
+      'With this off, the session cookie loses its Secure flag and can be sent over an unencrypted connection. Anyone able to watch that traffic on your network could take over a signed-in session.',
+    ),
+    default: true,
   }),
   reminderScheduler: Value.toggle({
     name: i18n('Daily Reminder Pass'),
@@ -48,7 +35,7 @@ const inputSpec = InputSpec.of({
   reminderHour: Value.number({
     name: i18n('Reminder Hour'),
     description: i18n(
-      'The local hour the daily pass runs at, in the time zone above.',
+      'The local hour the daily pass runs at, in the time zone below.',
     ),
     required: true,
     default: defaultReminderHour,
@@ -56,6 +43,22 @@ const inputSpec = InputSpec.of({
     max: 23,
     integer: true,
     units: i18n('hour of day'),
+  }),
+  timezone: Value.text({
+    name: i18n('Time Zone'),
+    description: i18n(
+      'An IANA time zone such as Europe/London or America/New_York, for the reminder hour. Each person sets their own time zone for their calendar in the app.',
+    ),
+    required: true,
+    default: 'UTC',
+    patterns: [
+      {
+        regex: '(UTC|[A-Za-z]+/[A-Za-z_+-]+(/[A-Za-z_+-]+)?)',
+        description: i18n(
+          'Must be UTC or an IANA zone name such as Europe/London',
+        ),
+      },
+    ],
   }),
   blockPrivateWebhooks: Value.toggle({
     name: i18n('Block Private Webhook Targets'),
@@ -79,7 +82,7 @@ export const settings = sdk.Action.withInput(
   {
     name: i18n('Settings'),
     description: i18n(
-      'Time zone, language, daily reminders and logging. Everything each person tracks is set inside the app, not here.',
+      'Registration, sign-in security, daily reminders and logging. Everything each person tracks is set inside the app, not here.',
     ),
     warning: null,
     allowedStatuses: 'any',
@@ -89,18 +92,18 @@ export const settings = sdk.Action.withInput(
 
   inputSpec,
 
-  async ({ effects }) => {
-    const store = await storeJson.read().once()
-    if (!store) return null
-    return {
-      timezone: store.timezone,
-      language: store.language,
-      reminderScheduler: store.reminderScheduler,
-      reminderHour: store.reminderHour,
-      blockPrivateWebhooks: store.blockPrivateWebhooks,
-      auditLog: store.auditLog,
-    }
-  },
+  async ({ effects }) =>
+    storeJson
+      .read((s) => ({
+        registrationOpen: s.registrationOpen,
+        cookieSecure: s.cookieSecure,
+        reminderScheduler: s.reminderScheduler,
+        reminderHour: s.reminderHour,
+        timezone: s.timezone,
+        blockPrivateWebhooks: s.blockPrivateWebhooks,
+        auditLog: s.auditLog,
+      }))
+      .once(),
 
   async ({ effects, input }) => {
     await storeJson.merge(effects, input)

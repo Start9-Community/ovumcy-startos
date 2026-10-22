@@ -1,21 +1,12 @@
 import { i18n } from '../i18n'
 import { sdk } from '../sdk'
 import { runCli } from '../utils'
-import { emailPattern } from './accounts'
+import { accountSelect } from './accounts'
 
 const { InputSpec, Value } = sdk
 
 const inputSpec = InputSpec.of({
-  email: Value.text({
-    name: i18n('Email'),
-    description: i18n(
-      'The account to delete. Run List Accounts first to be certain of the address.',
-    ),
-    required: true,
-    default: null,
-    patterns: [emailPattern],
-    inputmode: 'email',
-  }),
+  email: accountSelect(i18n('The account to delete.')),
   confirm: Value.toggle({
     name: i18n('I understand this deletes their health data'),
     description: i18n(
@@ -28,11 +19,6 @@ const inputSpec = InputSpec.of({
   }),
 })
 
-/**
- * Removing an account takes its health data with it. That is the right
- * behavior — somebody leaving a household should be able to have their cycle
- * record gone, not orphaned — which is exactly why it asks first.
- */
 export const deleteAccount = sdk.Action.withInput(
   'delete-account',
 
@@ -43,7 +29,7 @@ export const deleteAccount = sdk.Action.withInput(
     ),
     warning: null,
     allowedStatuses: 'any',
-    group: null,
+    group: i18n('Account'),
     visibility: 'enabled',
   },
 
@@ -60,10 +46,7 @@ export const deleteAccount = sdk.Action.withInput(
       )
     }
 
-    // --yes answers the CLI's own DELETE confirmation; the toggle above is the
-    // one a person actually reads. An address matching more than one account
-    // is refused by the CLI rather than resolved to whichever row comes first,
-    // and that error reaches the user as-is.
+    // --yes answers the CLI's own prompt; the toggle is the confirmation a person reads.
     const output = await runCli(effects, [
       'users',
       'delete',

@@ -34,7 +34,7 @@ Confirm that tag actually has a published image for the architectures this packa
 docker manifest inspect ghcr.io/ovumcy/ovumcy-web:<tag> | jq -r '.manifests[].platform.architecture'
 ```
 
-**Releases lag the default branch.** Upstream commits heavily between tags, so the newest release can be months behind `main`. Track tags anyway: a tag is a point upstream chose to stand behind, and its migrations and docs match. Do not pin a `sha-<commit>` tag to get ahead of a release.
+**Releases lag the default branch.** Upstream commits heavily between tags, so the newest release can be months behind `main`. Track tags: a tag is a point upstream chose to stand behind, and its migrations and docs match. The current commit pin is the one exception, for the reason above; don't add another.
 
 ## Applying the bump
 
@@ -49,10 +49,10 @@ docker manifest inspect ghcr.io/ovumcy/ovumcy-web:<tag> | jq -r '.manifests[].pl
    ```
 3. Update `version` in `startos/versions/current.ts` to `<upstream version>:0`, and write `releaseNotes` in all five locales. A package-only change keeps the upstream version and raises the revision after the colon instead (`1.9.2:1`). While the pin is a commit build, the version's base stays at the release it descends from.
 4. Add new user-facing strings to `startos/i18n/dictionaries/default.ts` and translate them in `translations.ts` for every locale — `satisfies Record<string, LangDict>` fails the build if a locale is incomplete. Note that the dictionary is keyed by index and the indices shift whenever a string is inserted, so adding one by hand means renumbering every locale below it; regenerate both files from the sources instead, carrying translations across by their English text.
-5. `BUILDX_BUILDER=<an OCI-capable builder> make x86` (the default Docker driver cannot export OCI — see `AGENTS.md`), then install on a StartOS box and verify against reality rather than against `tsc`. At minimum: a real sign-in, one account created through `create-account`, and a backup/restore round-trip. The full protocol is `references/verify-on-startos.md` in the `package-service` skill of your packaging workspace.
+5. `BUILDX_BUILDER=<an OCI-capable builder> make x86` (the default Docker driver cannot export OCI), then install on a StartOS box and verify against reality rather than against `tsc`. At minimum: a real sign-in, one account created through `create-account`, and a backup/restore round-trip. The full protocol is `references/verify-on-startos.md` in the `package-service` skill of your packaging workspace.
 
 ## Architecture
 
 This package declares `x86_64` and `aarch64`, and the `Makefile` builds both (`ARCHES := x86 arm`). Nothing extra is needed to keep that true across a bump: the upstream pin in the `Dockerfile` is a digest for an image **index**, not for one platform's manifest, so each arch builds against upstream's own binary for that arch. If you ever repin to a single-platform digest, the ARM build breaks — `docker buildx imagetools inspect <ref>` shows which kind you have.
 
-The ARM `.s9pk` has not been run on ARM hardware. Every on-box check recorded in `AGENTS.md` was done on x86_64; verify on real ARM hardware before relying on it there.
+The ARM `.s9pk` has not been run on ARM hardware; verify there before relying on it.

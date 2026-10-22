@@ -35,10 +35,6 @@ const inputSpec = InputSpec.of({
   }),
 })
 
-/**
- * Create an account for someone else on this server — a partner, a family
- * member, a friend. Each account's cycle data is isolated from every other's.
- */
 export const createAccount = sdk.Action.withInput(
   'create-account',
 
@@ -49,7 +45,7 @@ export const createAccount = sdk.Action.withInput(
     ),
     warning: null,
     allowedStatuses: 'any',
-    group: null,
+    group: i18n('Account'),
     visibility: 'enabled',
   },
 

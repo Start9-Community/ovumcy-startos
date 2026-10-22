@@ -5,16 +5,6 @@ import { adminEmail, storeJson } from '../fileModels/store.json'
 import { runCli } from '../utils'
 import { accountExists, asStdin, passwordSpec } from './accounts'
 
-/**
- * The package owns the admin credential: it generates it, applies it to
- * Ovumcy, stores it, and returns it. The same action covers first-set and
- * rotation, so there is exactly one place a password comes from.
- *
- * This is also what keeps the instance from being claimed by whoever opens
- * the address first. Registration is closed by default and no account exists
- * until this action runs, so Ovumcy's own first-run sign-up cannot be used to
- * take the server over.
- */
 export const setAdminPassword = sdk.Action.withoutInput(
   'set-admin-password',
 
@@ -28,20 +18,15 @@ export const setAdminPassword = sdk.Action.withoutInput(
           'Replaces the stored admin password and signs that account out everywhere.',
         )
       : null,
-    // Must run while stopped: until it has, the critical task it answers keeps
-    // the service from starting.
     allowedStatuses: 'any',
-    group: null,
+    group: i18n('Account'),
     visibility: 'enabled',
   }),
 
   async ({ effects }) => {
     const adminPassword = utils.getDefaultString(passwordSpec)
 
-    // Create the account the first time, reset it afterwards. Asking Ovumcy
-    // which case this is — rather than inferring it from the store — keeps a
-    // restored backup, or an account deleted inside the app, from turning into
-    // a failed command.
+    // Ask Ovumcy: the store can disagree with the database after a restore.
     const rotated = await accountExists(effects, adminEmail)
 
     if (rotated) {
@@ -63,11 +48,6 @@ export const setAdminPassword = sdk.Action.withoutInput(
     return {
       version: '1',
       title: i18n('Admin Credentials'),
-      // A reset and a first creation land the user somewhere different, so
-      // they are told different things. After a reset Ovumcy requires a new
-      // password at the next sign-in, which makes the one below good for
-      // exactly that sign-in; a newly created account goes to onboarding and
-      // keeps its password.
       message: rotated
         ? i18n(
             'Sign in with this at the Web Interface. Ovumcy will immediately ask you to choose a new password — that is expected after a reset, so this one is good for a single sign-in. Nothing is emailed; this server sends no mail.',

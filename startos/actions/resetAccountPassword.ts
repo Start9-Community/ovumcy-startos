@@ -2,21 +2,12 @@ import { i18n } from '../i18n'
 import { sdk } from '../sdk'
 import { adminEmail, storeJson } from '../fileModels/store.json'
 import { runCli } from '../utils'
-import { asStdin, emailPattern, passwordSpec } from './accounts'
+import { accountSelect, asStdin, passwordSpec } from './accounts'
 
 const { InputSpec, Value } = sdk
 
 const inputSpec = InputSpec.of({
-  email: Value.text({
-    name: i18n('Email'),
-    description: i18n(
-      'The account to reset. Run List Accounts if you are not sure of the address.',
-    ),
-    required: true,
-    default: null,
-    patterns: [emailPattern],
-    inputmode: 'email',
-  }),
+  email: accountSelect(i18n('The account to reset.')),
   password: Value.text({
     name: i18n('New Password'),
     description: i18n('Generated for you, or type one of your own.'),
@@ -27,12 +18,6 @@ const inputSpec = InputSpec.of({
   }),
 })
 
-/**
- * The way back in when someone has lost both their password and their recovery
- * code. There is no email reset on this server — nothing can send mail — so
- * this action is the only recovery path, and it belongs to whoever administers
- * the server.
- */
 export const resetAccountPassword = sdk.Action.withInput(
   'reset-account-password',
 
@@ -43,7 +28,7 @@ export const resetAccountPassword = sdk.Action.withInput(
     ),
     warning: null,
     allowedStatuses: 'any',
-    group: null,
+    group: i18n('Account'),
     visibility: 'enabled',
   },
 
@@ -58,9 +43,6 @@ export const resetAccountPassword = sdk.Action.withInput(
       asStdin(input.password),
     )
 
-    // Keep the stored admin credential honest: resetting that account here
-    // would otherwise leave Set Admin Password reporting a password that no
-    // longer works.
     if (input.email.toLowerCase() === adminEmail.toLowerCase()) {
       await storeJson.merge(effects, { adminPassword: input.password })
     }

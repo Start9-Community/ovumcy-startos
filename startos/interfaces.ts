@@ -4,8 +4,6 @@ import { uiPort } from './utils'
 
 export const setInterfaces = sdk.setupInterfaces(async ({ effects }) => {
   const uiMulti = sdk.MultiHost.of(effects, 'ui-multi')
-  // Plain HTTP: StartOS terminates TLS at its own proxy and forwards HTTP to
-  // the container. The app's port is never published to the network itself.
   const uiMultiOrigin = await uiMulti.bindPort(uiPort, { protocol: 'http' })
 
   const ui = sdk.createInterface(effects, {
@@ -15,8 +13,6 @@ export const setInterfaces = sdk.setupInterfaces(async ({ effects }) => {
       'The Ovumcy calendar and settings. Everyone with an account on this server signs in here.',
     ),
     type: 'ui',
-    // Nothing secret in the address itself — accounts are password-protected,
-    // and an address a household has to share is not a credential.
     masked: false,
     schemeOverride: null,
     username: null,

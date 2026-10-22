@@ -2,11 +2,6 @@ import { i18n } from '../i18n'
 import { sdk } from '../sdk'
 import { runCli } from '../utils'
 
-/**
- * One reminder pass, now, instead of waiting for tomorrow's scheduled one.
- * Without this, verifying that a newly configured ntfy or Gotify webhook
- * actually arrives means waiting up to a day.
- */
 export const runReminderPass = sdk.Action.withoutInput(
   'run-reminder-pass',
 

@@ -3,13 +3,6 @@ import { i18n } from '../i18n'
 import { sdk } from '../sdk'
 import { storeJson } from '../fileModels/store.json'
 
-/**
- * SECRET_KEY rotation. Generated on install and normally never touched —
- * upstream calls rotating it planned maintenance, not a routine change,
- * because everything it sealed stops verifying at once. Exposed because the
- * alternative, when someone has reason to believe the secret leaked, is
- * reinstalling the service.
- */
 export const rotateAppSecret = sdk.Action.withoutInput(
   'rotate-app-secret',
 

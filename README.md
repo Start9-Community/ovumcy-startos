@@ -32,25 +32,23 @@
 
 ## Image and Container Runtime
 
-The image is built here, from the `Dockerfile` at the repo root: upstream's `/app/ovumcy` binary, copied byte for byte out of upstream's published image, onto an `alpine:3.22` base. The upstream image cannot be used directly — it is built `FROM scratch`, and its layers contain `app/`, `etc/` and `usr/` and nothing else. StartOS launches a subcontainer and waits for `<rootfs>/proc/1` to appear, which a rootfs with no `/proc` can never produce, so that image fails every start with `Failed to start subcontainer ovumcy`. The alpine base supplies the directories a container runtime expects, and with them a shell and coreutils — which is also what makes the `chown` below possible.
+The image is built here, from the `Dockerfile` at the repo root: upstream's `/app/ovumcy` binary, copied byte for byte out of upstream's published image, onto an Alpine base. The upstream image cannot be used directly — it is built `FROM scratch`, and its layers contain `app/`, `etc/` and `usr/` and nothing else. StartOS launches a subcontainer and waits for `<rootfs>/proc/1` to appear, which a rootfs with no `/proc` can never produce, so that image fails every start with `Failed to start subcontainer ovumcy`. The alpine base supplies the directories a container runtime expects, and with them a shell and coreutils — which is also what makes the `chown` below possible.
 
 The upstream build it copies from is a **main-branch commit, not a release tag**. The newest upstream release cannot reset a password without a controlling terminal, and there is no terminal behind a StartOS action, which would leave account recovery — the thing an admin needs when someone is locked out — unreachable. It is pinned by digest, so the bytes are exactly the ones that were tested. `UPDATING.md` records when to move back to a release tag.
 
 | What             | Detail                                                                        |
 | ---------------- | ----------------------------------------------------------------------------- |
-| Image source     | Built from `./Dockerfile`: upstream's binary, pinned by digest, on `alpine:3.22` |
+| Image source     | Built from `./Dockerfile`: upstream's binary, pinned by digest, on Alpine     |
 | Architectures    | x86_64, aarch64 (see [Limitations](#limitations-and-differences) on ARM testing) |
 | Entrypoint       | `/app/ovumcy` named explicitly; the image declares no ENTRYPOINT              |
 | Process user     | `ovumcy` (uid 10001), as upstream ships                                       |
 
-The service keeps upstream's unprivileged uid. StartOS mounts volumes root-owned on every start, so the two data paths are given to uid 10001 before anything writes them — by a `chown` oneshot ahead of the daemon in `startos/main.ts`, and by `runCli` before each CLI command, since an action can run before the service has ever started. An `idmap` on the mount would avoid the chown, but the host refuses it (`open_tree_attr IDMAP: Operation not permitted`). Both the oneshot and the chown in `runCli` run on every start and every command, because the mount is re-made root-owned each time.
+The service keeps upstream's unprivileged uid. StartOS mounts volumes root-owned on every start, so the two data paths are given to uid 10001 before anything writes them — by a `chown` oneshot ahead of the daemon in `startos/main.ts`, and by `runCli` before each CLI command, since an action can run before the service has ever started. An `idmap` on the mount would avoid the chown, but the host refuses it (`open_tree_attr IDMAP: Operation not permitted`).
 
 Two subcontainers:
 
 - **`ovumcy-sub`** — the long-running daemon. Attach to it to watch the server: `start-cli package attach ovumcy -n ovumcy-sub`.
 - **`ovumcy-cli`** — created and torn down by each account-management action, which runs the upstream operator CLI (`/app/ovumcy users …`, `reset-password`, `notify`) against the same data volume. It is not running between actions.
-
-Volume mounts carry no `idmap`; the `chown` described above is what makes them writable by uid 10001 instead.
 
 ## Volume and Data Layout
 
@@ -92,11 +90,11 @@ One interface, serving the whole application — calendar, per-account settings,
 | --------- | ---- | ---- | -------- | ----------------------------------------------------------------- |
 | `ui`      | `ui` | 8080 | HTTP     | The web application: sign-in, calendar, per-account settings, `.ics` feeds |
 
-StartOS terminates TLS and forwards plain HTTP, so the container always sees `http` regardless of how the browser reached it. The session cookie's `Secure` flag is therefore a package setting rather than something derived from the request — see `cookieSecure` in the store and the **Allow Sign-In Over Plain HTTP** action. The practical consequence is that sign-in works from an https LAN address or from Tor Browser over `.onion`, and silently fails from a plain `http://` LAN address until that action is run.
+StartOS terminates TLS and forwards plain HTTP, so the container always sees `http` regardless of how the browser reached it. The session cookie's `Secure` flag is therefore a package setting rather than something derived from the request — see `cookieSecure` in the store and **Require A Secure Connection To Sign In** in `settings`. The practical consequence is that sign-in works from an https LAN address or from Tor Browser over `.onion`, and silently fails from a plain `http://` LAN address until that setting is turned off.
 
 The OS reverse proxy is trusted (`TRUST_PROXY_ENABLED=true`, `TRUSTED_PROXIES=10.0.3.1,fd00:3::1`), and it has to be or **no browser can sign in**. StartOS terminates TLS and forwards plain HTTP, so the app sees scheme `http` while the browser's `Origin` header says `https`; Fiber's CSRF middleware compares the two and refuses every unsafe request with `403` and `reason="invalid referer"` — which looks exactly like a rejected password on the sign-in form. Trusting the proxy lets the app read `X-Forwarded-Proto`, the origins match, and sign-in works.
 
-This is safe because the OS proxy **strips** any client-supplied `X-Forwarded-*` header before inserting its own, so exactly one hop is ever present and it is the OS's. `10.0.3.1` is the host's fixed address on the LXC bridge — the source address of every proxied request — named exactly rather than as a `/24`, which would also trust every sibling service on the box.
+This is safe because the OS proxy **strips** any client-supplied `X-Forwarded-*` header before inserting its own, so exactly one hop is ever present and it is the OS's. Ovumcy's startup `NOTE` that `c.IP()` returns a client-supplied leftmost `X-Forwarded-For` entry therefore does not apply here: that header only ever carries the one address the OS wrote. `10.0.3.1` is the host's fixed address on the LXC bridge — the source address of every proxied request — named exactly rather than as a `/24`, which would also trust every sibling service on the box.
 
 A consequence worth having: `X-Forwarded-For` now carries each client's real address, so the per-IP limiters distinguish LAN clients instead of pooling them. Over Tor they still genuinely share one address (the box's own Tor daemon), which is why the login budget is still widened (see [Limitations and Differences](#limitations-and-differences)).
 
@@ -110,22 +108,19 @@ Ordering constraint: nothing else is runnable until that task is satisfied, and 
 
 ## Actions
 
-Ten actions, in three groups: the package's own credential, account management for other people, and server settings. The account actions each spin up a throwaway subcontainer and run the upstream operator CLI against the live database — passwords reach it on stdin, never in argv or the environment. All of them work whether the service is running or stopped.
+Seven actions. The four account actions sit in an **Account** group; each spins up a throwaway subcontainer and runs the upstream operator CLI against the live database — passwords reach it on stdin, never in argv or the environment. Every action manages something Ovumcy's web UI cannot: the app has no admin role, so one account can never create, reset or delete another, and the server-wide switches are environment variables. All of them work whether the service is running or stopped.
 
 | Action                   | When to run it                                                                    | What it changes                                              | Cost / repeat safety                                                                      |
 | ------------------------ | --------------------------------------------------------------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
 | `set-admin-password`     | First install, or to rotate the admin credential                                  | The admin row in the database, and `adminPassword` in the store | Seconds. Safe to repeat — each run replaces the password and signs that account out. On a rotation the returned password is good for **one** sign-in: upstream then requires a new one (see below) |
 | `create-account`         | Adding another person to the server                                               | Inserts an account in the database                           | Seconds. **Not** idempotent: a second run for the same address fails, by upstream design   |
-| `list-accounts`          | Before any action that needs an address or id; auditing who exists                | Nothing                                                      | Seconds, read-only, repeatable                                                             |
-| `reset-account-password` | Someone has lost both their password and their recovery code                      | That account's password hash and session version; the store too if the address is the admin's | Seconds. Safe to repeat. Signs that account out everywhere                                  |
-| `delete-account`         | Removing someone, including their health record                                   | Deletes the account and all of its data                       | Seconds. **Destructive and irreversible**; a second run fails because the account is gone   |
-| `toggle-registration`    | Opening sign-up for a trusted household, or closing it again                      | `registrationOpen` in the store                               | Seconds, restarts the daemon. Idempotent per direction                                      |
-| `settings`               | Setting the time zone, language, reminder schedule, webhook guard or audit logging | The corresponding keys in the store                           | Seconds, restarts the daemon. Idempotent                                                    |
+| `reset-account-password` | Someone has lost both their password and their recovery code                      | That account's password hash and session version; the store too if the address is the admin's | Seconds. Safe to repeat. Signs that account out everywhere. Its account list is read from the database each time the form opens |
+| `delete-account`         | Removing someone who has not deleted their own account in the app                 | Deletes the account and all of its data                       | Seconds. **Destructive and irreversible**. Same account list as above                       |
+| `settings`               | Opening registration, allowing plain-HTTP sign-in, the reminder schedule, the webhook guard, audit logging | The corresponding keys in the store           | Seconds, restarts the daemon. Idempotent. Turning off the secure-connection requirement weakens session security |
 | `run-reminder-pass`      | Checking that a newly configured webhook actually delivers                         | Nothing stored; sends outbound webhook requests               | Seconds. Safe to repeat, but each run really does notify everyone currently due              |
-| `allow-insecure-cookies` | Sign-in must work over a plain `http://` LAN address                              | `cookieSecure` in the store                                   | Seconds, restarts the daemon. Idempotent per direction. Weakens session security             |
 | `rotate-app-secret`      | The application secret is believed to have leaked                                 | `secretKey` in the store                                      | Seconds, restarts the daemon. Safe to repeat and **costly**: every session, TOTP enrolment, stored webhook URL and feed URL is invalidated |
 
-No action is hidden; all ten are user-facing.
+No action is hidden; all seven are user-facing.
 
 **A CLI-set password is single-use; a CLI-created account's is not.** Upstream distinguishes the two, and so do the actions' result messages. After `reset-password` — which is what `set-admin-password` runs once the admin account exists, and all of `reset-account-password` — the next sign-in is redirected straight to a forced password change, so the value the action returned stops working after it. After `users create` the account signs in and goes to onboarding with the password it was given. The practical consequence: the store's `adminPassword` goes stale the moment a rotated admin signs in and chooses their own, and that is upstream behavior, not drift.
 
@@ -155,7 +150,7 @@ The strategy is whole-volume snapshots of `main` and `startos`, taken with the s
 
 ## Limitations and Differences
 
-1. **aarch64 is built but has not been run on ARM hardware.** Both halves of the image are genuinely multi-arch — the pinned upstream digest is an index carrying `linux/amd64` and `linux/arm64`, and so is the alpine base — so the ARM `.s9pk` contains upstream's own arm64 binary rather than an emulated x86 one. What is unverified is the running service: every on-box check recorded in `AGENTS.md` was done on x86_64.
+1. **aarch64 is built but has not been run on ARM hardware.** Both halves of the image are genuinely multi-arch — the pinned upstream digest is an index carrying `linux/amd64` and `linux/arm64`, and so is the alpine base — so the ARM `.s9pk` contains upstream's own arm64 binary rather than an emulated x86 one. What is unverified is the running service: every on-box test has been on x86_64.
 2. **The image is rebuilt here rather than used as published.** Upstream's `FROM scratch` image cannot start as a StartOS subcontainer at all, so this package copies the upstream binary — by digest, unmodified — onto an alpine base. The Cosign signature and SLSA provenance apply to the image the binary came from, not to the image this package ships; `UPDATING.md` keeps the digest check in the bump procedure. See [Image and Container Runtime](#image-and-container-runtime).
 3. **The upstream binary comes from a main-branch commit rather than a release**, so this package is ahead of upstream's newest tag. Without it, account recovery does not work at all on StartOS.
 4. **No email, so no self-service password reset.** The package configures no SMTP. Account recovery is the recovery code Ovumcy issues at account creation, or the `reset-account-password` action.
@@ -163,8 +158,8 @@ The strategy is whole-volume snapshots of `main` and `startos`, taken with the s
 6. **Postgres is not supported.** SQLite only, which is upstream's own recommended baseline for a single private deployment.
 7. **The per-IP login budget is widened** from upstream's 8 attempts per 15 minutes to 40. Over Tor every client arrives through the box's own Tor daemon and genuinely shares one address, so the stock budget is spent by the whole household together and would lock everyone out at once. Nothing else is relaxed — the per-account logout budget and the deliberately tight calendar-feed budget keep upstream's defaults.
 8. **HSTS is off** (`HSTS_ENABLED=false`), where upstream defaults it to whatever `COOKIE_SECURE` is. StartOS owns the edge, and pinning a `.local` or `.onion` host to HTTPS in visitors' browsers for a year is not this package's call.
-9. **Sign-in over plain HTTP fails until an action is run.** `COOKIE_SECURE` is on by default; `allow-insecure-cookies` is the documented escape hatch.
-10. **Registration is closed by default**, where upstream's default is open. `toggle-registration` reverses it.
+9. **Sign-in over plain HTTP fails until a setting is changed.** `COOKIE_SECURE` is on by default; turning off **Require A Secure Connection To Sign In** in `settings` is the escape hatch.
+10. **Registration is closed by default**, where upstream's default is open. **Open Registration** in `settings` reverses it.
 11. **The daily reminder pass is on by default**, where upstream ships it off. StartOS gives a user no cron, so leaving it off would make webhook reminders unreachable. It stays inert until someone configures a webhook URL in the app.
 12. **Three upstream CLI commands are not exposed** — `users set-email`, `repair symptom-names`, `webhook set` (see [Actions](#actions)).
 
@@ -174,7 +169,7 @@ The strategy is whole-volume snapshots of `main` and `startos`, taken with the s
 
 ```yaml
 package_id: ovumcy
-image: built from ./Dockerfile (upstream ghcr.io/ovumcy/ovumcy-web binary on alpine:3.22)
+image: built from ./Dockerfile (upstream ghcr.io/ovumcy/ovumcy-web binary on Alpine)
 process_user: ovumcy (uid 10001)
 architectures: [x86_64, aarch64]
 subcontainers: [ovumcy-sub, ovumcy-cli]
@@ -192,7 +187,6 @@ startos_managed_env_vars:
   - PORT
   - REGISTRATION_MODE
   - TZ
-  - DEFAULT_LANGUAGE
   - COOKIE_SECURE
   - HSTS_ENABLED
   - TRUST_PROXY_ENABLED
@@ -211,13 +205,10 @@ interfaces:
 actions:
   - set-admin-password
   - create-account
-  - list-accounts
   - reset-account-password
   - delete-account
-  - toggle-registration
   - settings
   - run-reminder-pass
-  - allow-insecure-cookies
   - rotate-app-secret
 tasks:
   - { action: set-admin-password, severity: critical }

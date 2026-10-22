@@ -5,7 +5,7 @@ export const manifest = setupManifest({
   id: 'ovumcy',
   title: 'Ovumcy',
   license: 'AGPL-3.0',
-  packageRepo: 'https://github.com/Start9-Community/startos-ovumcy',
+  packageRepo: 'https://github.com/Start9-Community/ovumcy-startos',
   upstreamRepo: 'https://github.com/ovumcy/ovumcy-web',
   marketingUrl: 'https://ovumcy.com/',
   donationUrl: null,

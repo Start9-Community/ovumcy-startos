@@ -1,7 +1,9 @@
 # Upstream's image is FROM scratch, with no /proc for a StartOS subcontainer; take its binary onto alpine.
 # Bump the tag and digest together — see UPDATING.md.
-FROM ghcr.io/ovumcy/ovumcy-web:sha-8918dac@sha256:2f3a952e90166e8e33d00b1789d41565b648bfb7b3133b322dd26339c714bc8a AS upstream
+FROM ghcr.io/ovumcy/ovumcy-web:sha-d28ddba@sha256:07d6a9bfc3483c61643c0f7828a73524c91a268767b9cae703364f649c7aaf19 AS upstream
 
+# Floating tag on purpose, where the binary above is a digest: this is the trust store the app checks
+# a webhook receiver against, and only a rebuild moves it when a CA is withdrawn.
 FROM alpine:3.22
 
 RUN apk add --no-cache ca-certificates tzdata \

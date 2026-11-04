@@ -16,3 +16,5 @@ bare clone with no workspace, the full guide is at <https://docs.start9.com/pack
 - **Never add `fence` to `ofVolumes` in `backups.ts`** — a backed-up fence defeats calendar-feed revocation across a restore.
 - **A rebuild is the only thing that moves the certificate store.** `apk add ca-certificates` resolves at build time, so a packed `.s9pk` keeps trusting a CA withdrawn afterwards; the app checks webhook receivers against it. Rebuild when one is withdrawn, even with no code change.
 - **A new store key the daemon's environment depends on goes in both `AppConfig` and the projection in `main.ts`.** Only the first is type-checked.
+- **Regenerate `startos/i18n/dictionaries/default.ts` and `translations.ts` from the sources rather than inserting a string by hand.** The dictionary is keyed by index, so an insertion shifts every index below it in every locale; carry translations across by their English text.
+- **Build with an OCI-capable buildx builder** (`BUILDX_BUILDER=<builder> make x86`). The default Docker driver cannot export OCI.

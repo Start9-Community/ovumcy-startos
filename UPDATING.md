@@ -1,6 +1,6 @@
 # Updating the upstream version
 
-Upstream is the prebuilt image `ghcr.io/ovumcy/ovumcy-web`. Nothing is built from source and there is no submodule — but the image this package ships is built from the root `Dockerfile`, which copies upstream's `/app/ovumcy` binary, unmodified and pinned by digest, onto an alpine base. Upstream's own image is `FROM scratch` and cannot start as a StartOS subcontainer (no `/proc` in its rootfs), which is why the copy exists; `README.md` § Image and Container Runtime has the detail.
+Upstream is the prebuilt image `ghcr.io/ovumcy/ovumcy-web`. Nothing is built from source and there is no submodule — but the image this package ships is built from the root `Dockerfile`, which copies upstream's `/app/ovumcy` binary, unmodified and pinned by digest, onto an alpine base.
 
 ## The pin is currently a commit, not a release
 
@@ -47,12 +47,8 @@ docker manifest inspect ghcr.io/ovumcy/ovumcy-web:<tag> | jq -r '.manifests[].pl
    ```bash
    docker buildx imagetools inspect ghcr.io/ovumcy/ovumcy-web:<tag> --format '{{.Manifest.Digest}}'
    ```
-3. Update `version` in `startos/versions/current.ts` to `<upstream version>:0`, and write `releaseNotes` in all five locales. A package-only change keeps the upstream version and raises the revision after the colon instead (`1.9.2:1`). While the pin is a commit build, the version's base stays at the release it descends from.
-4. Add new user-facing strings to `startos/i18n/dictionaries/default.ts` and translate them in `translations.ts` for every locale — `satisfies Record<string, LangDict>` fails the build if a locale is incomplete. Note that the dictionary is keyed by index and the indices shift whenever a string is inserted, so adding one by hand means renumbering every locale below it; regenerate both files from the sources instead, carrying translations across by their English text.
-5. `BUILDX_BUILDER=<an OCI-capable builder> make x86` (the default Docker driver cannot export OCI), then install on a StartOS box and verify against reality rather than against `tsc`. At minimum: a real sign-in, one account created through `create-account`, and a backup/restore round-trip. The full protocol is `references/verify-on-startos.md` in the `package-service` skill of your packaging workspace.
+3. While the pin is a commit build, the version's base in `startos/versions/current.ts` stays at the release it descends from.
 
 ## Architecture
 
-This package declares `x86_64` and `aarch64`, and the `Makefile` builds both (`ARCHES := x86 arm`). Nothing extra is needed to keep that true across a bump: the upstream pin in the `Dockerfile` is a digest for an image **index**, not for one platform's manifest, so each arch builds against upstream's own binary for that arch. If you ever repin to a single-platform digest, the ARM build breaks — `docker buildx imagetools inspect <ref>` shows which kind you have.
-
-The ARM `.s9pk` has not been run on ARM hardware; verify there before relying on it.
+Pin the digest of the image **index**, not of one platform's manifest: a single-platform digest breaks the ARM build. `docker buildx imagetools inspect <ref>` shows which kind you have.

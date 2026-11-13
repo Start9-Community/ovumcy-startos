@@ -26,16 +26,16 @@ const inputSpec = InputSpec.of({
     default: true,
   }),
   reminderScheduler: Value.toggle({
-    name: i18n('Daily Reminder Pass'),
+    name: i18n('Reminder Passes'),
     description: i18n(
-      'Lets Ovumcy check once a day whether anyone is due a reminder and send it to the webhook they configured. It does nothing until someone sets a webhook URL in the app’s own Settings. StartOS has no cron, so leaving this off means webhook reminders never fire.',
+      'Lets Ovumcy check whether anyone is due a reminder and send it to the webhook they configured: once a day at the hour below, and once an hour for reminders set to a particular cycle day. It does nothing until someone sets a webhook URL in the app’s own Settings. StartOS has no cron, so leaving this off means webhook reminders never fire.',
     ),
     default: true,
   }),
   reminderHour: Value.number({
     name: i18n('Reminder Hour'),
     description: i18n(
-      'The local hour the daily pass runs at, in the time zone below.',
+      'The local hour the daily pass runs at, in the time zone below. Reminders set to a particular cycle day go out at the time whoever set them picked, not this one.',
     ),
     required: true,
     default: defaultReminderHour,

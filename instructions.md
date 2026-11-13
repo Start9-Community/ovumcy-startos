@@ -43,7 +43,7 @@ A sign-in page, then the calendar. Everything each person tracks lives in the ap
 
 Three kinds, all driven by the same prediction: a banner in the app, a push to a webhook, and a private read-only calendar feed you can subscribe to from a phone or desktop calendar.
 
-Webhook reminders go to a notification server you run — ntfy or Gotify, for example. Each person sets their own webhook URL in the app's Settings; nothing is sent until they do. A daily pass checks who is due and sends them; set the hour it runs, and the time zone that hour is in, in **Settings**. To check a webhook works without waiting for tomorrow, run **Send Reminders Now**.
+Webhook reminders go to a notification server you run — ntfy or Gotify, for example. Each person sets their own webhook URL in the app's Settings; nothing is sent until they do. A daily pass checks who is due and sends them; set the hour it runs, and the time zone that hour is in, in **Settings**. Reminders someone has pinned to a particular cycle day — day 15 and day 25 for a medication, say — are checked every hour instead, and go out at the time that person picked for each one. To check a webhook works without waiting for the next pass, run **Send Reminders Now**.
 
 ### Managing accounts
 

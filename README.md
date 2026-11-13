@@ -152,16 +152,16 @@ The strategy is whole-volume snapshots of `main` and `startos`, taken with the s
 
 1. **aarch64 is built but has not been run on ARM hardware.** Both halves of the image are genuinely multi-arch — the pinned upstream digest is an index carrying `linux/amd64` and `linux/arm64`, and so is the alpine base — so the ARM `.s9pk` contains upstream's own arm64 binary rather than an emulated x86 one. What is unverified is the running service: every on-box test has been on x86_64.
 2. **The image is rebuilt here rather than used as published.** Upstream's `FROM scratch` image cannot start as a StartOS subcontainer at all, so this package copies the upstream binary — by digest, unmodified — onto an alpine base. The Cosign signature and SLSA provenance apply to the image the binary came from, not to the image this package ships; `UPDATING.md` keeps the digest check in the bump procedure. See [Image and Container Runtime](#image-and-container-runtime).
-3. **The upstream binary comes from a main-branch commit rather than a release**, so this package is ahead of upstream's newest tag. Without it, account recovery does not work at all on StartOS.
+3. **The upstream binary is a release build, pinned by digest.** Earlier revisions of this package had to pin a main-branch commit because no 1.9.x release could reset a password without a controlling terminal, and no StartOS action has one. `v2.2.1` carries the non-interactive path, so the pin is a tag again.
 4. **No email, so no self-service password reset.** The package configures no SMTP. Account recovery is the recovery code Ovumcy issues at account creation, or the `reset-account-password` action.
 5. **OIDC / SSO is disabled** (`OIDC_ENABLED=false`) and not exposed. It would need HTTPS to the container plus a redirect URL, and auto-provisioning would add a second route to account creation beside this package's actions.
 6. **Postgres is not supported.** SQLite only, which is upstream's own recommended baseline for a single private deployment.
-7. **The per-IP login budget is widened** from upstream's 8 attempts per 15 minutes to 40. Over Tor every client arrives through the box's own Tor daemon and genuinely shares one address, so the stock budget is spent by the whole household together and would lock everyone out at once. Nothing else is relaxed — the per-account logout budget and the deliberately tight calendar-feed budget keep upstream's defaults.
+7. **The per-IP login and second-factor budgets are widened** from upstream's 8 attempts per 15 minutes to 40. Over Tor every client arrives through the box's own Tor daemon and genuinely shares one address, so the stock budget is spent by the whole household together and would lock everyone out at once. Upstream's 2.0 split the TOTP challenge out of the login budget into `RATE_LIMIT_TOTP_CHALLENGE_*` with its own 8 per 15 minutes, which inherits the same flaw, so it is widened to match. Both stay under upstream's ceiling of 100 and its cap of 30 requests per minute for these pairs. Nothing else is relaxed — the per-account logout budget and the deliberately tight calendar-feed budget keep upstream's defaults.
 8. **HSTS is off** (`HSTS_ENABLED=false`), where upstream defaults it to whatever `COOKIE_SECURE` is. StartOS owns the edge, and pinning a `.local` or `.onion` host to HTTPS in visitors' browsers for a year is not this package's call.
 9. **Sign-in over plain HTTP fails until a setting is changed.** `COOKIE_SECURE` is on by default; turning off **Require A Secure Connection To Sign In** in `settings` is the escape hatch.
 10. **Registration is closed by default**, where upstream's default is open. **Open Registration** in `settings` reverses it.
-11. **The daily reminder pass is on by default**, where upstream ships it off. StartOS gives a user no cron, so leaving it off would make webhook reminders unreachable. It stays inert until someone configures a webhook URL in the app.
-12. **Three upstream CLI commands are not exposed** — `users set-email`, `repair symptom-names`, `webhook set` (see [Actions](#actions)).
+11. **The built-in reminder scheduler is on by default**, where upstream ships it off. StartOS gives a user no cron, so leaving it off would make webhook reminders unreachable. It stays inert until someone configures a webhook URL in the app. Since upstream's 2.2 it runs two passes: the daily one at `REMINDER_SCHEDULER_HOUR`, and an hourly one for cycle-day reminders, which go out at the hour each person picked for them.
+12. **Four upstream CLI commands are not exposed** — `users set-email`, `repair symptom-names`, `webhook set`, and `link-oidc-identity` (moot while `OIDC_ENABLED=false`). See [Actions](#actions). `healthcheck` and `readycheck` are probes rather than operator commands; this package's health check watches the port instead (see [Health Checks](#health-checks)).
 
 ---
 
@@ -194,6 +194,8 @@ startos_managed_env_vars:
   - TRUSTED_PROXIES
   - RATE_LIMIT_LOGIN_MAX
   - RATE_LIMIT_LOGIN_WINDOW
+  - RATE_LIMIT_TOTP_CHALLENGE_MAX
+  - RATE_LIMIT_TOTP_CHALLENGE_WINDOW
   - REMINDER_SCHEDULER_ENABLED
   - REMINDER_SCHEDULER_HOUR
   - AUDIT_LOG_ENABLED

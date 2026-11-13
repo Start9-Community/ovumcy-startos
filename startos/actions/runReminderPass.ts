@@ -8,7 +8,7 @@ export const runReminderPass = sdk.Action.withoutInput(
   {
     name: i18n('Send Reminders Now'),
     description: i18n(
-      'Run one reminder pass immediately, instead of waiting for the daily one. Useful for checking that a webhook you just set up works.',
+      'Run one reminder pass immediately, instead of waiting for the next scheduled one. Useful for checking that a webhook you just set up works.',
     ),
     warning: i18n(
       'Sends a reminder now to every account that has a webhook configured and is currently due one.',

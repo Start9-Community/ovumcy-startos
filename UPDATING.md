@@ -48,7 +48,7 @@ docker manifest inspect ghcr.io/ovumcy/ovumcy-web:<tag> | jq -r '.manifests[].pl
    ```bash
    docker buildx imagetools inspect ghcr.io/ovumcy/ovumcy-web:<tag> --format '{{.Manifest.Digest}}'
    ```
-3. Bump `startos/versions/current.ts` to the new upstream version with a fresh `:0` revision, and move the version it replaces into its own file under `startos/versions/`, listed in the `other` array of `startos/versions/index.ts` — that array is the migration path for an install still on it. While a pin is a commit build, the version's base stays at the release it descends from.
+3. While a pin is a commit build, the version's base stays at the release it descends from.
 4. Reconcile the i18n dictionaries if any user-facing string changed. `startos/i18n/dictionaries/default.ts` is keyed by index, so append rather than insert, and when the English text of an existing key changes, update that same index in every locale in `translations.ts`.
 
 ## Architecture

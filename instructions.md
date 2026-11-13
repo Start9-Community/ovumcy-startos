@@ -57,4 +57,10 @@ These actions are grouped under **Account**.
 
 ### Backups
 
-A StartOS backup captures the database and the account you signed in with. One thing behaves deliberately differently: any private calendar subscription link that someone revoked stays dead after a restore, and the links that were live are disarmed as a precaution. Each person re-generates theirs from the app's Settings afterwards.
+A StartOS backup captures every account's cycle data and the package settings. Restoring it deliberately does not restore access: Ovumcy signs everyone out, revokes local passwords and recovery codes, clears stored webhook URLs, and disarms calendar subscription links. This prevents access someone revoked after the backup from becoming live again.
+
+After restoring:
+
+1. Start the service and wait for the **Web Interface** health check to pass. Password resets cannot run until this first start completes.
+2. Run **Set Admin Password** for your admin account and **Reset Account Password** for each other account. Old passwords and recovery codes no longer work. Give each person their replacement password privately; Ovumcy asks them to choose their own when they sign in.
+3. Each person re-enters their webhook URL and generates a new calendar subscription link in the app's Settings if they use those features. Their cycle data is still there.

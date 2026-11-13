@@ -34,7 +34,7 @@
 
 The image is built here, from the `Dockerfile` at the repo root: upstream's `/app/ovumcy` binary, copied byte for byte out of upstream's published image, onto an Alpine base. The upstream image cannot be used directly — it is built `FROM scratch`, and its layers contain `app/`, `etc/` and `usr/` and nothing else. StartOS launches a subcontainer and waits for `<rootfs>/proc/1` to appear, which a rootfs with no `/proc` can never produce, so that image fails every start with `Failed to start subcontainer ovumcy`. The alpine base supplies the directories a container runtime expects, and with them a shell and coreutils — which is also what makes the `chown` below possible.
 
-The upstream build it copies from is a **main-branch commit, not a release tag**. The newest upstream release cannot reset a password without a controlling terminal, and there is no terminal behind a StartOS action, which would leave account recovery — the thing an admin needs when someone is locked out — unreachable. It is pinned by digest, so the bytes are exactly the ones that were tested. `UPDATING.md` records when to move back to a release tag.
+The binary comes from upstream's **`v2.2.1` release, pinned by image-index digest**. Its account-creation and password-reset commands accept passwords on piped stdin, as StartOS actions require. `UPDATING.md` records the regression probe to run before changing the pin.
 
 | What             | Detail                                                                        |
 | ---------------- | ----------------------------------------------------------------------------- |
@@ -62,7 +62,7 @@ Three volumes, which is one more than this service looks like it needs; the thir
 
 The database is embedded SQLite. Upstream also supports Postgres; this package does not use it.
 
-The fence is a single small file whose whole purpose is to not be in a backup. Ovumcy compares it against the database to tell whether the database in front of it is the one this instance last wrote. Keeping it on its own volume, excluded from backups, is what makes a revoked calendar-feed URL stay revoked across a restore. If the directory is ever unwritable the app fails closed — it disarms every armed feed on each start and logs that it did.
+The fence is a small marker file deliberately excluded from backups. Ovumcy compares it against the database to detect a restore and prevent revoked access from returning. A missing or mismatched file beside a database that already carries a marker triggers revocation of feeds, sessions, local passwords and recovery codes, and stored webhook endpoints. An unreadable or unwritable fence refuses startup. See [Backups and Restore](#backups-and-restore) for recovery.
 
 `store.json` is deliberately on a volume no subcontainer mounts: it holds the application secret and the admin password this package generates, and the application has no reason to be able to read either.
 
@@ -108,7 +108,7 @@ Ordering constraint: nothing else is runnable until that task is satisfied, and 
 
 ## Actions
 
-Seven actions. The four account actions sit in an **Account** group; each spins up a throwaway subcontainer and runs the upstream operator CLI against the live database — passwords reach it on stdin, never in argv or the environment. Every action manages something Ovumcy's web UI cannot: the app has no admin role, so one account can never create, reset or delete another, and the server-wide switches are environment variables. All of them work whether the service is running or stopped.
+Seven actions. The four account actions sit in an **Account** group; each spins up a throwaway subcontainer and runs the upstream operator CLI against the live database — passwords reach it on stdin, never in argv or the environment. Every action manages something Ovumcy's web UI cannot: the app has no admin role, so one account can never create, reset or delete another, and the server-wide switches are environment variables. Once the server has initialized the fence, all seven actions can run with the service running or stopped. After restoring a backup, start the server once before running password resets, account deletion or a reminder pass.
 
 | Action                   | When to run it                                                                    | What it changes                                              | Cost / repeat safety                                                                      |
 | ------------------------ | --------------------------------------------------------------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
@@ -124,9 +124,9 @@ No action is hidden; all seven are user-facing.
 
 **A CLI-set password is single-use; a CLI-created account's is not.** Upstream distinguishes the two, and so do the actions' result messages. After `reset-password` — which is what `set-admin-password` runs once the admin account exists, and all of `reset-account-password` — the next sign-in is redirected straight to a forced password change, so the value the action returned stops working after it. After `users create` the account signs in and goes to onboarding with the password it was given. The practical consequence: the store's `adminPassword` goes stale the moment a rotated admin signs in and chooses their own, and that is upstream behavior, not drift.
 
-**`reset-password` needs the fence marker, which only a started server writes.** On a never-started install the command refuses, naming the fence. This never bites in practice, because the only path that runs before the first start is the `users create` branch of `set-admin-password` — but it is why that action asks Ovumcy which branch it is on rather than assuming.
+**Fence-dependent commands need a completed server start.** `reset-password`, `users delete` and `notify` require the database and fence markers to agree. On a fresh install, the `users create` branch of `set-admin-password` works before that first start. After a restore, the server must first process the restored database and re-arm the fence; password resets, deletion and reminder delivery refuse until it does.
 
-Three upstream CLI capabilities are deliberately not exposed as actions: `users set-email` (repair for a legacy-format address), `repair symptom-names` (a break-glass data repair for a migration that refuses to run), and `webhook set` (each person sets their own webhook inside the app). Each is a one-file addition if a real need appears.
+Four upstream CLI capabilities are deliberately not exposed as actions: `users set-email` (repair for a legacy-format address), `repair symptom-names` (a break-glass data repair for a migration that refuses to run), `webhook set` (each person sets their own webhook inside the app), and `link-oidc-identity` (OIDC is disabled).
 
 ## Tasks
 
@@ -140,13 +140,21 @@ One check, on the daemon itself.
 
 - **Web Interface** — `checkPortListening` on 8080, with a 30-second grace period. Within the grace window a failure reads as "starting", which covers the first start of a fresh install: the binary applies database migrations before it listens, and on a new install it creates the database first.
 
-A failure after that window means the process is up but not listening, or has exited — the service log is the next place to look. The most likely causes are a `store.json` with no `secretKey` (the daemon refuses to start and says so) and an unwritable `/app/data` (the `chown` oneshot is what normally prevents this — if it failed, the service log says so before the daemon's first line).
+A failure after that window means the process is up but not listening, or has exited — the service log is the next place to look. The most likely causes are a `store.json` with no `secretKey` (the daemon refuses to start and says so) and unwritable `/app/data` or `/app/fence` directories (the `chown` oneshot normally prevents this; startup reports a database or fence write failure if either remains unwritable).
 
 ## Backups and Restore
 
 The strategy is whole-volume snapshots of `main` and `startos`, taken with the service stopped, so the SQLite file is quiescent while it is copied and no dump or checkpoint step is involved. Both volumes have to be in it: a database restored without the secret that sealed its sessions, TOTP secrets, webhook URLs and feed URLs would have none of those readable.
 
-`fence` is excluded on purpose, and this is the one place where a restore is intentionally not a faithful rewind. After a restore the fence no longer matches the database in front of it, so Ovumcy disarms every armed calendar feed on its next start and logs that it did. That is what stops a feed URL someone revoked from coming back live when an older database is restored. Each account re-generates the subscribe URLs it still wants from the app's own settings; nothing else needs doing.
+`fence` is excluded on purpose: restoring it beside the database would revive access revoked since the backup. When the first start detects a restored database, Ovumcy disarms every calendar feed, invalidates every session, revokes local passwords and recovery codes, and clears stored webhook endpoints. It logs the revocation counts. The restored cycle data remains intact.
+
+After restoring:
+
+1. Start the service and wait for **Web Interface** readiness. Password resets, account deletion and reminder delivery refuse until the server has reconciled the restored database with the fence.
+2. Run **Set Admin Password** for `admin@ovumcy.local` and **Reset Account Password** for each other account. The old passwords and recovery codes no longer work; the restored `adminPassword` in `store.json` is stale too. Each person signs in with the replacement password and chooses their own when prompted.
+3. Each person re-enters their webhook URL and generates any calendar subscribe URLs they still want from the app's Settings.
+
+Losing or recreating the fence volume beside an existing database triggers the same recovery, even without a database restore.
 
 ## Limitations and Differences
 

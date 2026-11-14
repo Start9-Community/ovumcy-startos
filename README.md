@@ -152,7 +152,7 @@ After restoring:
 
 1. Start the service and wait for **Web Interface** readiness. Password resets, account deletion and reminder delivery refuse until the server has reconciled the restored database with the fence.
 2. Run **Set Admin Password** for `admin@ovumcy.local` and **Reset Account Password** for each other account. The old passwords and recovery codes no longer work; the restored `adminPassword` in `store.json` is stale too. Each person signs in with the replacement password and chooses their own when prompted.
-3. Each person re-enters their webhook URL and generates any calendar subscribe URLs they still want from the app's Settings.
+3. Each person re-enters their webhook URL and generates any calendar subscribe URLs they still want from the app's Settings. A reset does not reissue a recovery code, so each person generates one there too — with no SMTP configured it is the only self-service way back into an account.
 
 Losing or recreating the fence volume beside an existing database triggers the same recovery, even without a database restore.
 

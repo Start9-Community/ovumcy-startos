@@ -64,3 +64,4 @@ After restoring:
 1. Start the service and wait for the **Web Interface** health check to pass. Password resets cannot run until this first start completes.
 2. Run **Set Admin Password** for your admin account and **Reset Account Password** for each other account. Old passwords and recovery codes no longer work. Give each person their replacement password privately; Ovumcy asks them to choose their own when they sign in.
 3. Each person re-enters their webhook URL and generates a new calendar subscription link in the app's Settings if they use those features. Their cycle data is still there.
+4. Have each person save a new recovery code from the app's Settings. Resetting a password does not issue one, and without it there is no way back into an account except asking you for another reset.

@@ -15,7 +15,7 @@ Accounts are separate. Each person signs in with their own email address and pas
 
 Sign-up from the login page is closed. You hand out accounts with **Create Account**, which is what keeps someone who finds the address from making themselves an account on your server.
 
-This server sends no email. That matters in one place: there is no "forgot my password" email. Each person gets a recovery code when their account is created — tell them to keep it — and if that is lost too, you can set them a new password with **Reset Account Password**.
+This server sends no email. If someone forgets their password, use **Reset Account Password**, even if they still have their recovery code. A recovery code works with the current password to recover access when a second-factor authenticator is lost; it cannot replace a forgotten password. Have each person keep their code somewhere safe.
 
 ## Getting set up
 
@@ -62,6 +62,5 @@ A StartOS backup captures every account's cycle data and the package settings. R
 After restoring:
 
 1. Start the service and wait for the **Web Interface** health check to pass. Password resets cannot run until this first start completes.
-2. Run **Set Admin Password** for your admin account and **Reset Account Password** for each other account. Old passwords and recovery codes no longer work. Give each person their replacement password privately; Ovumcy asks them to choose their own when they sign in.
-3. Each person re-enters their webhook URL and generates a new calendar subscription link in the app's Settings if they use those features. Their cycle data is still there.
-4. Have each person save a new recovery code from the app's Settings. Resetting a password does not issue one, and without it there is no way back into an account except asking you for another reset.
+2. Run **Set Admin Password** for your admin account and **Reset Account Password** for each other account. Old passwords and recovery codes no longer work. Give each person their replacement password privately; Ovumcy asks them to choose their own when they sign in. Have them save the new recovery code shown when they complete that password change.
+3. Each person re-enters their webhook URL and generates a new calendar subscription link in the app's Settings if they use those features. Their cycle data is still there. If they regenerate a recovery code later, they must generate a new calendar subscription link afterwards too: the old link is revoked.

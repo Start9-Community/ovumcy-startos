@@ -10,7 +10,7 @@ const dict = {
   Password: 4,
   'Generated for you. Give it to them over something private, and let them change it in the app afterwards.': 5,
   'Show Recovery Code': 6,
-  'Also print the account recovery code. It is the only way back in if they lose both their password and access to this server, and it is shown once.': 7,
+  'Also print the account recovery code, shown once. Recovery needs both this code and the current password; the code replaces a lost second factor, not a forgotten password.': 7,
   'Create Account': 8,
   'Add an account for another person. Their calendar, symptoms and notes are theirs alone — no other account on this server can see them.': 9,
   'Account Created': 10,
@@ -33,7 +33,7 @@ const dict = {
   'New Password': 25,
   'Generated for you, or type one of your own.': 26,
   'Reset Account Password': 27,
-  'Set a new password for one account. Use it when someone has lost both their password and their recovery code. Every session for that account is signed out.': 28,
+  'Set a new password for one account when its password is forgotten or revoked. Every session for that account is signed out.': 28,
   'Password Reset': 29,
   'Give this to the person it belongs to. Ovumcy will require them to choose a new password as soon as they sign in, so this one is good for a single sign-in. Their cycle data is untouched.': 30,
   // actions/rotateAppSecret.ts

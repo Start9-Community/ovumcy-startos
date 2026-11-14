@@ -24,7 +24,7 @@ export const resetAccountPassword = sdk.Action.withInput(
   {
     name: i18n('Reset Account Password'),
     description: i18n(
-      'Set a new password for one account. Use it when someone has lost both their password and their recovery code. Every session for that account is signed out.',
+      'Set a new password for one account when its password is forgotten or revoked. Every session for that account is signed out.',
     ),
     warning: null,
     allowedStatuses: 'any',

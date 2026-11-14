@@ -15,7 +15,7 @@ Accounts are separate. Each person signs in with their own email address and pas
 
 Sign-up from the login page is closed. You hand out accounts with **Create Account**, which is what keeps someone who finds the address from making themselves an account on your server.
 
-This server sends no email. That matters in one place: there is no "forgot my password" email. Each person gets a recovery code when their account is created — tell them to keep it — and if that is lost too, you can set them a new password with **Reset Account Password**.
+This server sends no email. If someone forgets their password, use **Reset Account Password**, even if they still have their recovery code. A recovery code works with the current password to recover access when a second-factor authenticator is lost; it cannot replace a forgotten password. Have each person keep their code somewhere safe.
 
 ## Getting set up
 
@@ -43,7 +43,7 @@ A sign-in page, then the calendar. Everything each person tracks lives in the ap
 
 Three kinds, all driven by the same prediction: a banner in the app, a push to a webhook, and a private read-only calendar feed you can subscribe to from a phone or desktop calendar.
 
-Webhook reminders go to a notification server you run — ntfy or Gotify, for example. Each person sets their own webhook URL in the app's Settings; nothing is sent until they do. A daily pass checks who is due and sends them; set the hour it runs, and the time zone that hour is in, in **Settings**. To check a webhook works without waiting for tomorrow, run **Send Reminders Now**.
+Webhook reminders go to a notification server you run — ntfy or Gotify, for example. Each person sets their own webhook URL in the app's Settings; nothing is sent until they do. A daily pass checks who is due and sends them; set the hour it runs, and the time zone that hour is in, in **Settings**. Reminders someone has pinned to a particular cycle day — day 15 and day 25 for a medication, say — are checked every hour instead, and go out at the time that person picked for each one. To check a webhook works without waiting for the next pass, run **Send Reminders Now**.
 
 ### Managing accounts
 
@@ -57,4 +57,10 @@ These actions are grouped under **Account**.
 
 ### Backups
 
-A StartOS backup captures the database and the account you signed in with. One thing behaves deliberately differently: any private calendar subscription link that someone revoked stays dead after a restore, and the links that were live are disarmed as a precaution. Each person re-generates theirs from the app's Settings afterwards.
+A StartOS backup captures every account's cycle data and the package settings. Restoring it deliberately does not restore access: Ovumcy signs everyone out, revokes local passwords and recovery codes, clears stored webhook URLs, and disarms calendar subscription links. This prevents access someone revoked after the backup from becoming live again.
+
+After restoring:
+
+1. Start the service and wait for the **Web Interface** health check to pass. Password resets cannot run until this first start completes.
+2. Run **Set Admin Password** for your admin account and **Reset Account Password** for each other account. Old passwords and recovery codes no longer work. Give each person their replacement password privately; Ovumcy asks them to choose their own when they sign in. Have them save the new recovery code shown when they complete that password change.
+3. Each person re-enters their webhook URL and generates a new calendar subscription link in the app's Settings if they use those features. Their cycle data is still there. If they regenerate a recovery code later, they must generate a new calendar subscription link afterwards too: the old link is revoked.

@@ -2,25 +2,26 @@
 
 Upstream is the prebuilt image `ghcr.io/ovumcy/ovumcy-web`. Nothing is built from source and there is no submodule — but the image this package ships is built from the root `Dockerfile`, which copies upstream's `/app/ovumcy` binary, unmodified and pinned by digest, onto an alpine base.
 
-## The pin is currently a commit, not a release
+## The password probe
 
-`v1.9.2` — the newest release when this package was written — cannot reset a password without a controlling terminal, and no StartOS action has one. The pin is therefore `sha-d28ddba`, a main-branch build carrying upstream's non-interactive `reset-password`; `sha-` tags name one commit each, so the pin is immutable.
-
-**Move back to a release tag as soon as one contains that change.** The test is behavioral, not a changelog read — run it against the candidate image before repinning:
+No StartOS action has a controlling terminal, so every account action in this package depends on upstream reading the password as the first line of piped stdin. `v1.9.2` could not, which is why this package pinned a main-branch commit until `v2.2.1`. Treat that as a standing regression test rather than history: run it against each candidate image before repinning, because the check is behavioral and a changelog read will not catch it.
 
 ```bash
 printf 'Throwaway-Pass-1!\n' | docker run --rm -i \
   -v "$PWD/probe-data:/app/data" -v "$PWD/probe-fence:/app/fence" \
-  -e SECRET_KEY=probe -e DB_DRIVER=sqlite -e DB_PATH=/app/data/ovumcy.db \
+  -e SECRET_KEY=probe-probe-probe-probe-probe-probe-probe \
+  -e DB_DRIVER=sqlite -e DB_PATH=/app/data/ovumcy.db \
   -e CALENDAR_FEED_FENCE_PATH=/app/fence/calendar-feed.fence \
   ghcr.io/ovumcy/ovumcy-web:<candidate> /app/ovumcy users create probe@example.com
 ```
 
-Then start that image once (so it writes the fence), stop it, and run `reset-password probe@example.com` the same way. If it answers `secure password prompt requires an interactive terminal`, that release still predates the fix — stay on the commit pin. Throw the probe directories away afterwards.
+Then start that image once (so it writes the fence), stop it, and run `reset-password probe@example.com` the same way. If either answers `secure password prompt requires an interactive terminal`, that release cannot carry this package — `set-admin-password`, `create-account` and `reset-account-password` all break. Throw the probe directories away afterwards.
+
+Since 2.0 the image also sets `CALENDAR_FEED_FENCE_REQUIRE_MOUNT=true`, so the probe needs its `/app/fence` bind mount; the digest-pinned stage in this package's `Dockerfile` copies only the binary and inherits none of upstream's `ENV`.
 
 ## Determining the upstream version
 
-The pin lives in the root `Dockerfile`, as the `FROM … AS upstream` line — a `sha-`/release tag **and** the digest it resolved to. Both move together; `startos/manifest/index.ts` just says `dockerBuild: {}`.
+The pin lives in the root `Dockerfile`, as the `FROM … AS upstream` line — a release tag **and** the digest it resolved to. Both move together; `startos/manifest/index.ts` just says `dockerBuild: {}`.
 
 The latest upstream release:
 
@@ -34,7 +35,7 @@ Confirm that tag actually has a published image for the architectures this packa
 docker manifest inspect ghcr.io/ovumcy/ovumcy-web:<tag> | jq -r '.manifests[].platform.architecture'
 ```
 
-**Releases lag the default branch.** Upstream commits heavily between tags, so the newest release can be months behind `main`. Track tags: a tag is a point upstream chose to stand behind, and its migrations and docs match. The current commit pin is the one exception, for the reason above; don't add another.
+**Releases lag the default branch.** Upstream commits heavily between tags, so the newest release can be months behind `main`. Track tags anyway: a tag is a point upstream chose to stand behind, and its migrations and docs match. Pinning a `sha-` commit build is a last resort for a defect that makes the package unusable — as the password probe once was — and it is carried only until a release contains the fix.
 
 ## Applying the bump
 
@@ -47,7 +48,8 @@ docker manifest inspect ghcr.io/ovumcy/ovumcy-web:<tag> | jq -r '.manifests[].pl
    ```bash
    docker buildx imagetools inspect ghcr.io/ovumcy/ovumcy-web:<tag> --format '{{.Manifest.Digest}}'
    ```
-3. While the pin is a commit build, the version's base in `startos/versions/current.ts` stays at the release it descends from.
+3. While a pin is a commit build, the version's base stays at the release it descends from.
+4. Reconcile the i18n dictionaries if any user-facing string changed. `startos/i18n/dictionaries/default.ts` is keyed by index, so append rather than insert, and when the English text of an existing key changes, update that same index in every locale in `translations.ts`.
 
 ## Architecture
 

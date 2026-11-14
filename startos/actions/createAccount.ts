@@ -29,7 +29,7 @@ const inputSpec = InputSpec.of({
   showRecoveryCode: Value.toggle({
     name: i18n('Show Recovery Code'),
     description: i18n(
-      'Also print the account recovery code. It is the only way back in if they lose both their password and access to this server, and it is shown once.',
+      'Also print the account recovery code, shown once. Recovery needs both this code and the current password; the code replaces a lost second factor, not a forgotten password.',
     ),
     default: true,
   }),

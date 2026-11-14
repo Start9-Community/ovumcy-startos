@@ -34,7 +34,7 @@
 
 The image is built here, from the `Dockerfile` at the repo root: upstream's `/app/ovumcy` binary, copied byte for byte out of upstream's published image, onto an Alpine base. The upstream image cannot be used directly — it is built `FROM scratch`, and its layers contain `app/`, `etc/` and `usr/` and nothing else. StartOS launches a subcontainer and waits for `<rootfs>/proc/1` to appear, which a rootfs with no `/proc` can never produce, so that image fails every start with `Failed to start subcontainer ovumcy`. The alpine base supplies the directories a container runtime expects, and with them a shell and coreutils — which is also what makes the `chown` below possible.
 
-The upstream build it copies from is a **main-branch commit, not a release tag**. The newest upstream release cannot reset a password without a controlling terminal, and there is no terminal behind a StartOS action, which would leave account recovery — the thing an admin needs when someone is locked out — unreachable. It is pinned by digest, so the bytes are exactly the ones that were tested. `UPDATING.md` records when to move back to a release tag.
+The binary comes from upstream's **`v2.2.1` release, pinned by image-index digest**. Its account-creation and password-reset commands accept passwords on piped stdin, as StartOS actions require. `UPDATING.md` records the regression probe to run before changing the pin.
 
 | What             | Detail                                                                        |
 | ---------------- | ----------------------------------------------------------------------------- |
@@ -62,7 +62,7 @@ Three volumes, which is one more than this service looks like it needs; the thir
 
 The database is embedded SQLite. Upstream also supports Postgres; this package does not use it.
 
-The fence is a single small file whose whole purpose is to not be in a backup. Ovumcy compares it against the database to tell whether the database in front of it is the one this instance last wrote. Keeping it on its own volume, excluded from backups, is what makes a revoked calendar-feed URL stay revoked across a restore. If the directory is ever unwritable the app fails closed — it disarms every armed feed on each start and logs that it did.
+The fence is a small marker file deliberately excluded from backups. Ovumcy compares it against the database to detect a restore and prevent revoked access from returning. A missing or mismatched file beside a database that already carries a marker triggers revocation of feeds, sessions, local passwords and recovery codes, and stored webhook endpoints. An unreadable or unwritable fence refuses startup. See [Backups and Restore](#backups-and-restore) for recovery.
 
 `store.json` is deliberately on a volume no subcontainer mounts: it holds the application secret and the admin password this package generates, and the application has no reason to be able to read either.
 
@@ -108,13 +108,13 @@ Ordering constraint: nothing else is runnable until that task is satisfied, and 
 
 ## Actions
 
-Seven actions. The four account actions sit in an **Account** group; each spins up a throwaway subcontainer and runs the upstream operator CLI against the live database — passwords reach it on stdin, never in argv or the environment. Every action manages something Ovumcy's web UI cannot: the app has no admin role, so one account can never create, reset or delete another, and the server-wide switches are environment variables. All of them work whether the service is running or stopped.
+Seven actions. The four account actions sit in an **Account** group; each spins up a throwaway subcontainer and runs the upstream operator CLI against the live database — passwords reach it on stdin, never in argv or the environment. Every action manages something Ovumcy's web UI cannot: the app has no admin role, so one account can never create, reset or delete another, and the server-wide switches are environment variables. Once the server has initialized the fence, all seven actions can run with the service running or stopped. After restoring a backup, start the server once before running password resets, account deletion or a reminder pass.
 
 | Action                   | When to run it                                                                    | What it changes                                              | Cost / repeat safety                                                                      |
 | ------------------------ | --------------------------------------------------------------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
 | `set-admin-password`     | First install, or to rotate the admin credential                                  | The admin row in the database, and `adminPassword` in the store | Seconds. Safe to repeat — each run replaces the password and signs that account out. On a rotation the returned password is good for **one** sign-in: upstream then requires a new one (see below) |
 | `create-account`         | Adding another person to the server                                               | Inserts an account in the database                           | Seconds. **Not** idempotent: a second run for the same address fails, by upstream design   |
-| `reset-account-password` | Someone has lost both their password and their recovery code                      | That account's password hash and session version; the store too if the address is the admin's | Seconds. Safe to repeat. Signs that account out everywhere. Its account list is read from the database each time the form opens |
+| `reset-account-password` | The password is forgotten or was revoked by a restore                      | That account's password hash and session version; the store too if the address is the admin's | Seconds. Safe to repeat. Signs that account out everywhere. Its account list is read from the database each time the form opens |
 | `delete-account`         | Removing someone who has not deleted their own account in the app                 | Deletes the account and all of its data                       | Seconds. **Destructive and irreversible**. Same account list as above                       |
 | `settings`               | Opening registration, allowing plain-HTTP sign-in, the reminder schedule, the webhook guard, audit logging | The corresponding keys in the store           | Seconds, restarts the daemon. Idempotent. Turning off the secure-connection requirement weakens session security |
 | `run-reminder-pass`      | Checking that a newly configured webhook actually delivers                         | Nothing stored; sends outbound webhook requests               | Seconds. Safe to repeat, but each run really does notify everyone currently due              |
@@ -124,9 +124,11 @@ No action is hidden; all seven are user-facing.
 
 **A CLI-set password is single-use; a CLI-created account's is not.** Upstream distinguishes the two, and so do the actions' result messages. After `reset-password` — which is what `set-admin-password` runs once the admin account exists, and all of `reset-account-password` — the next sign-in is redirected straight to a forced password change, so the value the action returned stops working after it. After `users create` the account signs in and goes to onboarding with the password it was given. The practical consequence: the store's `adminPassword` goes stale the moment a rotated admin signs in and chooses their own, and that is upstream behavior, not drift.
 
-**`reset-password` needs the fence marker, which only a started server writes.** On a never-started install the command refuses, naming the fence. This never bites in practice, because the only path that runs before the first start is the `users create` branch of `set-admin-password` — but it is why that action asks Ovumcy which branch it is on rather than assuming.
+Completing that forced password change issues and displays a new recovery code. A recovery code works with the current password to replace a lost second factor; it cannot replace a forgotten password. Regenerating a recovery code revokes existing calendar-feed URLs, so any feed must be re-armed afterwards.
 
-Three upstream CLI capabilities are deliberately not exposed as actions: `users set-email` (repair for a legacy-format address), `repair symptom-names` (a break-glass data repair for a migration that refuses to run), and `webhook set` (each person sets their own webhook inside the app). Each is a one-file addition if a real need appears.
+**Fence-dependent commands need a completed server start.** `reset-password`, `users delete` and `notify` require the database and fence markers to agree. On a fresh install, the `users create` branch of `set-admin-password` works before that first start. After a restore, the server must first process the restored database and re-arm the fence; password resets, deletion and reminder delivery refuse until it does.
+
+Four upstream CLI capabilities are deliberately not exposed as actions: `users set-email` (repair for a legacy-format address), `repair symptom-names` (a break-glass data repair for a migration that refuses to run), `webhook set` (each person sets their own webhook inside the app), and `link-oidc-identity` (OIDC is disabled).
 
 ## Tasks
 
@@ -140,28 +142,36 @@ One check, on the daemon itself.
 
 - **Web Interface** — `checkPortListening` on 8080, with a 30-second grace period. Within the grace window a failure reads as "starting", which covers the first start of a fresh install: the binary applies database migrations before it listens, and on a new install it creates the database first.
 
-A failure after that window means the process is up but not listening, or has exited — the service log is the next place to look. The most likely causes are a `store.json` with no `secretKey` (the daemon refuses to start and says so) and an unwritable `/app/data` (the `chown` oneshot is what normally prevents this — if it failed, the service log says so before the daemon's first line).
+A failure after that window means the process is up but not listening, or has exited — the service log is the next place to look. The most likely causes are a `store.json` with no `secretKey` (the daemon refuses to start and says so) and unwritable `/app/data` or `/app/fence` directories (the `chown` oneshot normally prevents this; startup reports a database or fence write failure if either remains unwritable).
 
 ## Backups and Restore
 
 The strategy is whole-volume snapshots of `main` and `startos`, taken with the service stopped, so the SQLite file is quiescent while it is copied and no dump or checkpoint step is involved. Both volumes have to be in it: a database restored without the secret that sealed its sessions, TOTP secrets, webhook URLs and feed URLs would have none of those readable.
 
-`fence` is excluded on purpose, and this is the one place where a restore is intentionally not a faithful rewind. After a restore the fence no longer matches the database in front of it, so Ovumcy disarms every armed calendar feed on its next start and logs that it did. That is what stops a feed URL someone revoked from coming back live when an older database is restored. Each account re-generates the subscribe URLs it still wants from the app's own settings; nothing else needs doing.
+`fence` is excluded on purpose: restoring it beside the database would revive access revoked since the backup. When the first start detects a restored database, Ovumcy disarms every calendar feed, invalidates every session, revokes local passwords and recovery codes, and clears stored webhook endpoints. It logs the revocation counts. The restored cycle data remains intact.
+
+After restoring:
+
+1. Start the service and wait for **Web Interface** readiness. Password resets, account deletion and reminder delivery refuse until the server has reconciled the restored database with the fence.
+2. Run **Set Admin Password** for `admin@ovumcy.local` and **Reset Account Password** for each other account. The old passwords and recovery codes no longer work; the restored `adminPassword` in `store.json` is stale too. Each person signs in with the replacement password, chooses their own when prompted, and saves the recovery code displayed when that password change completes.
+3. Each person re-enters their webhook URL and generates any calendar subscribe URLs they still want from the app's Settings.
+
+Losing or recreating the fence volume beside an existing database triggers the same recovery, even without a database restore.
 
 ## Limitations and Differences
 
 1. **aarch64 is built but has not been run on ARM hardware.** Both halves of the image are genuinely multi-arch — the pinned upstream digest is an index carrying `linux/amd64` and `linux/arm64`, and so is the alpine base — so the ARM `.s9pk` contains upstream's own arm64 binary rather than an emulated x86 one. What is unverified is the running service: every on-box test has been on x86_64.
 2. **The image is rebuilt here rather than used as published.** Upstream's `FROM scratch` image cannot start as a StartOS subcontainer at all, so this package copies the upstream binary — by digest, unmodified — onto an alpine base. The Cosign signature and SLSA provenance apply to the image the binary came from, not to the image this package ships; `UPDATING.md` keeps the digest check in the bump procedure. See [Image and Container Runtime](#image-and-container-runtime).
-3. **The upstream binary comes from a main-branch commit rather than a release**, so this package is ahead of upstream's newest tag. Without it, account recovery does not work at all on StartOS.
-4. **No email, so no self-service password reset.** The package configures no SMTP. Account recovery is the recovery code Ovumcy issues at account creation, or the `reset-account-password` action.
+3. **The upstream binary is a release build, pinned by digest.** Earlier revisions of this package had to pin a main-branch commit because no 1.9.x release could reset a password without a controlling terminal, and no StartOS action has one. `v2.2.1` carries the non-interactive path, so the pin is a tag again.
+4. **Forgotten passwords require an operator reset.** The package configures no SMTP. A recovery code replaces a missing second factor only when the current password is known; a forgotten password requires `reset-account-password`.
 5. **OIDC / SSO is disabled** (`OIDC_ENABLED=false`) and not exposed. It would need HTTPS to the container plus a redirect URL, and auto-provisioning would add a second route to account creation beside this package's actions.
 6. **Postgres is not supported.** SQLite only, which is upstream's own recommended baseline for a single private deployment.
-7. **The per-IP login budget is widened** from upstream's 8 attempts per 15 minutes to 40. Over Tor every client arrives through the box's own Tor daemon and genuinely shares one address, so the stock budget is spent by the whole household together and would lock everyone out at once. Nothing else is relaxed — the per-account logout budget and the deliberately tight calendar-feed budget keep upstream's defaults.
+7. **The per-IP login and second-factor budgets are widened** from upstream's 8 attempts per 15 minutes to 40. Over Tor every client arrives through the box's own Tor daemon and genuinely shares one address, so the stock budget is spent by the whole household together and would lock everyone out at once. Upstream's 2.0 split the TOTP challenge out of the login budget into `RATE_LIMIT_TOTP_CHALLENGE_*` with its own 8 per 15 minutes, which inherits the same flaw, so it is widened to match. Both stay under upstream's ceiling of 100 and its cap of 30 requests per minute for these pairs. Nothing else is relaxed — the per-account logout budget and the deliberately tight calendar-feed budget keep upstream's defaults.
 8. **HSTS is off** (`HSTS_ENABLED=false`), where upstream defaults it to whatever `COOKIE_SECURE` is. StartOS owns the edge, and pinning a `.local` or `.onion` host to HTTPS in visitors' browsers for a year is not this package's call.
 9. **Sign-in over plain HTTP fails until a setting is changed.** `COOKIE_SECURE` is on by default; turning off **Require A Secure Connection To Sign In** in `settings` is the escape hatch.
 10. **Registration is closed by default**, where upstream's default is open. **Open Registration** in `settings` reverses it.
-11. **The daily reminder pass is on by default**, where upstream ships it off. StartOS gives a user no cron, so leaving it off would make webhook reminders unreachable. It stays inert until someone configures a webhook URL in the app.
-12. **Three upstream CLI commands are not exposed** — `users set-email`, `repair symptom-names`, `webhook set` (see [Actions](#actions)).
+11. **The built-in reminder scheduler is on by default**, where upstream ships it off. StartOS gives a user no cron, so leaving it off would make webhook reminders unreachable. It stays inert until someone configures a webhook URL in the app. Since upstream's 2.2 it runs two passes: the daily one at `REMINDER_SCHEDULER_HOUR`, and an hourly one for cycle-day reminders, which go out at the hour each person picked for them.
+12. **Four upstream CLI commands are not exposed** — `users set-email`, `repair symptom-names`, `webhook set`, and `link-oidc-identity` (moot while `OIDC_ENABLED=false`). See [Actions](#actions). `healthcheck` and `readycheck` are probes rather than operator commands; this package's health check watches the port instead (see [Health Checks](#health-checks)).
 
 ---
 
@@ -194,6 +204,8 @@ startos_managed_env_vars:
   - TRUSTED_PROXIES
   - RATE_LIMIT_LOGIN_MAX
   - RATE_LIMIT_LOGIN_WINDOW
+  - RATE_LIMIT_TOTP_CHALLENGE_MAX
+  - RATE_LIMIT_TOTP_CHALLENGE_WINDOW
   - REMINDER_SCHEDULER_ENABLED
   - REMINDER_SCHEDULER_HOUR
   - AUDIT_LOG_ENABLED

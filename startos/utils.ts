@@ -55,9 +55,15 @@ export const appEnv = (store: AppConfig | null) => ({
   // The host's address on lxcbr0: the source of every proxied request.
   TRUSTED_PROXIES: '10.0.3.1,fd00:3::1',
 
-  // Every Tor client shares the box's own Tor daemon address, so upstream's 8 per 15m is spent by a whole household.
+  // The edge limiters key on IP alone, and every Tor client shares the box's own Tor daemon
+  // address, so upstream's 8 per 15m is spent by a whole household. 40 per 15m stays under
+  // upstream's 100 ceiling and its 30-per-minute cap on these credential pairs.
   RATE_LIMIT_LOGIN_MAX: '40',
   RATE_LIMIT_LOGIN_WINDOW: '15m',
+  // Same shared bucket, same reasoning: 2.0 split the second-factor challenge out of the login
+  // budget with its own 8 per 15m, which one household's authenticators exhaust between them.
+  RATE_LIMIT_TOTP_CHALLENGE_MAX: '40',
+  RATE_LIMIT_TOTP_CHALLENGE_WINDOW: '15m',
 
   REMINDER_SCHEDULER_ENABLED: String(store?.reminderScheduler ?? true),
   REMINDER_SCHEDULER_HOUR: String(store?.reminderHour ?? 9),
